@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Signal Desk Test Feed</title>
+    <item>
+      <title>테스트 플랫폼 업데이트와 이용자 반응</title>
+      <link>https://example.com/test-1</link>
+      <pubDate>Sat, 19 Sep 2026 05:00:00 GMT</pubDate>
+      <description><![CDATA[플랫폼 UI 업데이트에 이용자 반응이 이어지고 있다.]]></description>
+    </item>
+    <item>
+      <title>게임 패치로 밸런스 논쟁</title>
+      <link>https://example.com/test-2</link>
+      <pubDate>Sat, 19 Sep 2026 04:00:00 GMT</pubDate>
+      <description><![CDATA[새 패치 이후 게임 경험에 대한 논쟁이 이어지고 있다.]]></description>
+    </item>
+  </channel>
+</rss>

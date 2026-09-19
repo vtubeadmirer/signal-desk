@@ -1,0 +1,16 @@
+[
+  {
+    "name": "공식 게임/플랫폼 피드",
+    "url": "https://replace-with-approved-feed.example/rss.xml",
+    "tier": "official",
+    "category": "IT·플랫폼",
+    "enabled": false
+  },
+  {
+    "name": "허용된 국내 전문 매체 RSS",
+    "url": "https://replace-with-approved-feed.example/rss.xml",
+    "tier": "professional",
+    "category": "게임·인터넷 방송",
+    "enabled": false
+  }
+]

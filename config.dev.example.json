@@ -1,0 +1,9 @@
+[
+  {
+    "name": "LOCAL FIXTURE ONLY",
+    "url": "https://example.com/sample-feed.xml",
+    "tier": "approved_feed",
+    "category": "게임·인터넷 방송",
+    "enabled": false
+  }
+]

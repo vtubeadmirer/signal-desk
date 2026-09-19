@@ -1,0 +1,55 @@
+name: build-windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Python tests
+        run: python -m unittest discover -s python/tests -v
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Build Python sidecar
+        shell: pwsh
+        run: ./scripts/build-sidecar.ps1
+
+      - name: Generate Tauri updater placeholder notice
+        shell: pwsh
+        run: |
+          if ((Get-Content src-tauri/tauri.conf.json -Raw) -match 'REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY') {
+            Write-Host 'INFO: Release signing keys are not configured in this scaffold. Production release must replace the updater public key and add the private key secret.'
+          }
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Tauri dependency check
+        run: npm run tauri info
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --ci

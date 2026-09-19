@@ -1,0 +1,120 @@
+name: release-windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Test
+        run: |
+          python -m unittest discover -s python/tests -v
+          npm run build
+
+      - name: Build Python sidecar
+        shell: pwsh
+        run: ./scripts/build-sidecar.ps1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Require release signing configuration
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_TIMESTAMP_URL: ${{ secrets.WINDOWS_CERTIFICATE_TIMESTAMP_URL }}
+        run: |
+          $required = @(
+            @{n='TAURI_SIGNING_PRIVATE_KEY'; v=$env:TAURI_SIGNING_PRIVATE_KEY},
+            @{n='WINDOWS_CERTIFICATE'; v=$env:WINDOWS_CERTIFICATE_BASE64},
+            @{n='WINDOWS_CERTIFICATE_PASSWORD'; v=$env:WINDOWS_CERTIFICATE_PASSWORD},
+            @{n='WINDOWS_CERTIFICATE_TIMESTAMP_URL'; v=$env:WINDOWS_CERTIFICATE_TIMESTAMP_URL}
+          )
+          foreach ($item in $required) {
+            if ([string]::IsNullOrWhiteSpace($item.v)) {
+              throw "Missing required release secret: $($item.n)"
+            }
+          }
+          if ((Get-Content src-tauri/tauri.conf.json -Raw) -match 'REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY') {
+            throw 'Updater public key is still a placeholder. Refusing release.'
+          }
+          if ((Get-Content src-tauri/tauri.conf.json -Raw) -match 'REPLACE_WITH_OWNER') {
+            throw 'Updater endpoint is still a placeholder. Refusing release.'
+          }
+
+      - name: Import Windows signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_TIMESTAMP_URL: ${{ secrets.WINDOWS_CERTIFICATE_TIMESTAMP_URL }}
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "signal-desk.pfx"
+          [IO.File]::WriteAllBytes($tmp, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $cert = Import-PfxCertificate -FilePath $tmp -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText) | Select-Object -First 1
+          if (-not $cert) { throw "Windows code-signing certificate import failed." }
+          $thumbprint = ($cert.Thumbprint -replace '\s','').ToUpperInvariant()
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          if ($null -eq $config.bundle.windows) { $config.bundle | Add-Member -MemberType NoteProperty -Name windows -Value ([pscustomobject]@{}) }
+          $config.bundle.windows | Add-Member -Force -MemberType NoteProperty -Name certificateThumbprint -Value $thumbprint
+          $config.bundle.windows | Add-Member -Force -MemberType NoteProperty -Name digestAlgorithm -Value "sha256"
+          $config.bundle.windows | Add-Member -Force -MemberType NoteProperty -Name timestampUrl -Value $env:WINDOWS_CERTIFICATE_TIMESTAMP_URL
+          $config | ConvertTo-Json -Depth 32 | Set-Content src-tauri/tauri.conf.json -Encoding UTF8
+          Write-Host "Windows certificate imported and signing config prepared."
+
+      - name: Build and publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npm run tauri build -- --ci
+
+      - name: Attest NSIS artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Verify updater manifest and create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $manifest = Get-ChildItem -Path src-tauri/target/release/bundle -Recurse -Filter latest.json | Select-Object -First 1
+          if (-not $manifest) { throw "Tauri updater latest.json was not produced. Refusing release." }
+          $assets = Get-ChildItem -Path src-tauri/target/release/bundle -Recurse -File | Where-Object {
+            $_.Name -eq "latest.json" -or $_.Extension -in @(".exe", ".zip", ".sig")
+          }
+          if (-not $assets) { throw "No release assets found." }
+          $paths = @($assets | ForEach-Object { $_.FullName })
+          gh release create "${{ github.ref_name }}" --title "Signal Desk ${{ github.ref_name }}" --generate-notes --verify-tag $paths

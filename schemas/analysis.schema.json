@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {"type":"string"},
+          "why_now": {"type":"string"},
+          "confirmed_facts": {"type":"array","items":{"type":"string"}},
+          "discussion_points": {"type":"array","items":{"type":"string"}},
+          "caveats": {"type":"array","items":{"type":"string"}},
+          "talkability": {"type":"integer","minimum":0,"maximum":100},
+          "verification_cost": {"type":"integer","minimum":0,"maximum":100},
+          "context_required": {"type":"integer","minimum":0,"maximum":100},
+          "prep_minutes": {"type":"integer","minimum":0,"maximum":60}
+        },
+        "required":["event_id","why_now","confirmed_facts","discussion_points","caveats","talkability","verification_cost","context_required","prep_minutes"]
+      }
+    }
+  },
+  "required":["items"]
+}

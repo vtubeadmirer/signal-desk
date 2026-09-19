@@ -1,0 +1,22 @@
+[package]
+name = "signal-desk"
+version = "0.1.0"
+description = "Local-first broadcast news curation desktop app"
+authors = ["Signal Desk"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "signal_desk_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-updater = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
