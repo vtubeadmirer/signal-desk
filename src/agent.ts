@@ -25,15 +25,25 @@ function startAgent() {
       }
     }
   });
-  command.stderr.on("data", () => {
-    // Deliberately ignored in UI. The agent must never print secrets to stderr.
+  command.stderr.on("data", (line) => {
+    console.error("[signal-desk-agent stderr]", String(line));
   });
-  command.on("close", () => {
+  command.on("error", (error) => {
+    console.error("[signal-desk-agent error]", error);
+  });
+  command.on("close", (event) => {
+    console.error("[signal-desk-agent close]", event);
     command = null;
     child = null;
     const old = pending;
     pending = [];
-    for (const item of old) item.reject(new Error("Signal Desk agent closed"));
+    for (const item of old) {
+      item.reject(
+        new Error(
+          `Signal Desk agent closed (code=${event.code}, signal=${event.signal})`,
+        ),
+      );
+    }
   });
   return command;
 }
@@ -41,7 +51,16 @@ function startAgent() {
 export async function callAgent(payload: Record<string, unknown>): Promise<AgentResponse> {
   const cmd = startAgent();
   const promise = new Promise<AgentResponse>((resolve, reject) => pending.push({ resolve, reject }));
-  if (!child) child = await cmd.spawn();
+  if (!child) {
+    try {
+      child = await cmd.spawn();
+      console.error("[signal-desk-agent spawned]", child.pid);
+    } catch (error) {
+      console.error("[signal-desk-agent spawn error]", error);
+      pending.pop()?.reject(error);
+      throw error;
+    }
+  }
   await child.write(`${JSON.stringify(payload)}\n`);
   return promise;
 }
