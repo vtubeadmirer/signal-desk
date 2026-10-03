@@ -11,6 +11,7 @@ permissions:
 jobs:
   test-and-build:
     runs-on: windows-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -53,3 +54,11 @@ jobs:
 
       - name: Build Tauri app
         run: npm run tauri build -- --ci
+
+      - name: Upload Windows installer
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-desk-windows-installer
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
