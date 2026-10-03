@@ -61,8 +61,15 @@ export async function callAgent(payload: Record<string, unknown>): Promise<Agent
       throw error;
     }
   }
+  try {
   await child.write(`${JSON.stringify(payload)}\n`);
-  return promise;
+  console.error("[signal-desk-agent write] success");
+} catch (error) {
+  console.error("[signal-desk-agent write error]", error);
+  pending.pop()?.reject(error);
+  throw error;
+}
+return promise;
 }
 
 export async function health() {
