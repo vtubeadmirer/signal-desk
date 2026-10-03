@@ -55,10 +55,63 @@ jobs:
       - name: Build Tauri app
         run: npm run tauri build -- --ci
 
+      - name: Prepare Windows portable package
+        if: always()
+        shell: pwsh
+        run: |
+          $portable = "portable\Signal Desk"
+
+          New-Item -ItemType Directory -Force -Path $portable | Out-Null
+
+          Copy-Item `
+            "src-tauri\target\release\signal-desk.exe" `
+            "$portable\signal-desk.exe" `
+            -ErrorAction Stop
+
+          Copy-Item `
+            "src-tauri\binaries\signal-desk-agent-x86_64-pc-windows-msvc.exe" `
+            "$portable\signal-desk-agent.exe" `
+            -ErrorAction Stop
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "$portable\_up_\schemas" | Out-Null
+
+          Copy-Item `
+            "schemas\analysis.schema.json" `
+            "$portable\_up_\schemas\analysis.schema.json" `
+            -ErrorAction Stop
+
+          Write-Host "Portable package prepared:"
+          Get-ChildItem $portable -Recurse
+
+      - name: Create Windows portable ZIP
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "portable\Signal Desk") {
+            Compress-Archive `
+              -Path "portable\Signal Desk" `
+              -DestinationPath "Signal-Desk-Portable.zip" `
+              -Force
+
+            Write-Host "Portable ZIP created:"
+            Get-Item "Signal-Desk-Portable.zip"
+          }
+
       - name: Upload Windows installer
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: signal-desk-windows-installer
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
+      - name: Upload Windows portable package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-desk-windows-portable
+          path: Signal-Desk-Portable.zip
           if-no-files-found: error
