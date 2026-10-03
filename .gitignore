@@ -17,3 +17,18 @@ python/tests/__pycache__/
 *.key
 *.pem
 *.pfx
+# Local Python environment and build artifacts
+python/.venv/
+python/build/
+python/dist/
+*.spec
+
+# Tauri generated/build artifacts
+src-tauri/binaries/
+src-tauri/gen/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Local news source configuration
+config.sources.json
