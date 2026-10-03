@@ -445,6 +445,16 @@ def handle(request: dict) -> dict:
 
 def main() -> int:
     debug_log("main() entered")
+
+    # Tauri sidecar IPC uses UTF-8 JSON. On Windows, PyInstaller may
+    # otherwise inherit a legacy console encoding such as cp1252.
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8", errors="strict")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="strict")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     try:
         for line in sys.stdin:
             if not line.strip():
