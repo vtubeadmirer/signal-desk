@@ -10,6 +10,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import traceback
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
@@ -18,6 +19,32 @@ from urllib.parse import urljoin, urlparse
 import xml.etree.ElementTree as ET
 
 from security import MAX_FEED_BYTES, MAX_INPUT_BYTES, resolve_public_url, safe_text, validate_https_resource_url, validate_public_url
+
+
+def debug_log(message: str) -> None:
+    """Write sidecar diagnostics to a per-user Windows log when possible."""
+    try:
+        if os.name == "nt":
+            base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Signal Desk"
+        else:
+            base = Path.home() / ".signal-desk"
+        base.mkdir(parents=True, exist_ok=True)
+        log_path = base / "agent-debug.log"
+        timestamp = datetime.now().astimezone().isoformat()
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{timestamp}] {message}\n")
+            handle.flush()
+    except Exception:
+        pass
+
+
+debug_log("=== Signal Desk agent starting ===")
+debug_log(f"Python: {sys.version}")
+debug_log(f"Executable: {sys.executable}")
+debug_log(f"argv: {sys.argv}")
+debug_log(f"cwd: {os.getcwd()}")
+debug_log(f"LOCALAPPDATA: {os.environ.get('LOCALAPPDATA', '')}")
+debug_log(f"frozen: {getattr(sys, 'frozen', False)}")
 
 CATEGORIES = {
     "버튜버·크리에이터": ["버튜버", "버추얼", "스트리머", "크리에이터", "데뷔", "졸업", "팬미팅"],
@@ -380,6 +407,7 @@ def ai_analyze(candidates: list[dict]) -> list[dict]:
 
 
 def handle(request: dict) -> dict:
+    debug_log(f"handle op={request.get("op", "")!r}")
     raw = json.dumps(request, ensure_ascii=False).encode("utf-8")
     if len(raw) > MAX_INPUT_BYTES:
         return {"ok": False, "op": str(request.get("op", "")), "error": "입력이 너무 큽니다."}
@@ -416,17 +444,27 @@ def handle(request: dict) -> dict:
 
 
 def main() -> int:
-    for line in sys.stdin:
-        if not line.strip():
-            continue
-        try:
-            request = json.loads(line)
-            response = handle(request)
-        except Exception:
-            response = {"ok": False, "op": "unknown", "error": "요청 처리 중 오류가 발생했습니다."}
-        sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
-    return 0
+    debug_log("main() entered")
+    try:
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            debug_log(f"stdin line received: {len(line)} bytes")
+            try:
+                request = json.loads(line)
+                response = handle(request)
+            except Exception as exc:
+                debug_log(f"request exception: {type(exc).__name__}: {exc}")
+                debug_log(traceback.format_exc())
+                response = {"ok": False, "op": "unknown", "error": "요청 처리 중 오류가 발생했습니다."}
+            sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
+            sys.stdout.flush()
+        debug_log("stdin reached EOF; exiting normally")
+        return 0
+    except BaseException as exc:
+        debug_log(f"FATAL main exception: {type(exc).__name__}: {exc}")
+        debug_log(traceback.format_exc())
+        return 1
 
 
 if __name__ == "__main__":
