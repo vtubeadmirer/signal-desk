@@ -9,11 +9,67 @@ const PROVIDER_KEY = "signal-desk:provider:v1";
 
 const DEFAULT_SOURCES: Source[] = [
   {
-    name: "예시 — 공식/허용 피드",
-    url: "https://replace-with-approved-feed.example/rss.xml",
-    tier: "approved_feed",
+    name: "전자신문 IT",
+    url: "https://rss.etnews.com/03.xml",
+    tier: "professional",
+    category: "IT·플랫폼",
+    enabled: true,
+  },
+  {
+    name: "연합뉴스",
+    url: "https://www.yna.co.kr/rss/news.xml",
+    tier: "professional",
     category: "사회·생활",
-    enabled: false,
+    enabled: true,
+  },
+  {
+    name: "경향신문",
+    url: "https://www.khan.co.kr/rss/rssdata/total_news.xml",
+    tier: "professional",
+    category: "사회·생활",
+    enabled: true,
+  },
+  {
+    name: "동아일보",
+    url: "https://rss.donga.com/total.xml",
+    tier: "professional",
+    category: "사회·생활",
+    enabled: true,
+  },
+  {
+    name: "한겨레",
+    url: "https://www.hani.co.kr/rss/",
+    tier: "professional",
+    category: "사회·생활",
+    enabled: true,
+  },
+  {
+    name: "IT동아",
+    url: "https://it.donga.com/feeds/rss/",
+    tier: "professional",
+    category: "IT·플랫폼",
+    enabled: true,
+  },
+  {
+    name: "테크M",
+    url: "https://www.techm.kr/rss/allArticle.xml",
+    tier: "professional",
+    category: "IT·플랫폼",
+    enabled: true,
+  },
+  {
+    name: "JTBC",
+    url: "https://fs.jtbc.co.kr/RSS/newsflash.xml",
+    tier: "professional",
+    category: "사회·생활",
+    enabled: true,
+  },
+  {
+    name: "SBS",
+    url: "https://news.sbs.co.kr/news/SectionRssFeed.do?section=01",
+    tier: "professional",
+    category: "사회·생활",
+    enabled: true,
   },
 ];
 
@@ -134,6 +190,10 @@ export default function App() {
     ]);
   }
 
+  function restoreDefaultSources() {
+    setSources(DEFAULT_SOURCES.map((source) => ({ ...source })));
+  }
+
   function updateSource(index: number, patch: Partial<Source>) {
     setSources((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   }
@@ -233,7 +293,10 @@ export default function App() {
                 <h1>뉴스 소스</h1>
                 <p>공개되어 있다는 이유만으로 재사용 권한이 생기는 것은 아닙니다. 실제 이용이 허용된 RSS/Atom/공식 피드만 활성화하세요.</p>
               </div>
-              <button className="secondary" onClick={addSource}>소스 추가</button>
+              <div className="panel-actions">
+                <button className="secondary" onClick={restoreDefaultSources}>기본 소스 복원</button>
+                <button className="secondary" onClick={addSource}>소스 추가</button>
+              </div>
             </div>
             <div className="source-list">
               {sources.map((source, index) => (
