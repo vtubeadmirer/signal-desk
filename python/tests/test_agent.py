@@ -50,7 +50,7 @@ class SignalDeskSecurityTests(unittest.TestCase):
             "usage_status": "review_required",
         }]
         out = build_candidates(items)
-        self.assertEqual(out[0]["decision"], "exclude")
+        self.assertEqual(out, [])
 
     def test_dedupes_same_story(self):
         base = {

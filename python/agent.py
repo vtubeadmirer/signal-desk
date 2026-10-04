@@ -54,11 +54,11 @@ CATEGORIES = {
     "사회·생활": ["소비자", "노동", "안전", "교육", "문화", "법", "제도", "정책", "공공"],
 }
 FRAMES = {
-    "공정성": ["공정", "차별", "형평", "정책", "규정"],
-    "비용·과금": ["가격", "과금", "수수료", "환불", "구독", "결제"],
-    "창작·권리": ["저작권", "창작", "크리에이터", "2차", "권리"],
-    "플랫폼 운영": ["플랫폼", "추천", "정책", "운영", "정지", "제재"],
-    "게임 경험": ["게임", "패치", "버그", "밸런스", "서버", "확률"],
+    "공정성": ["공정", "차별", "형평", "선정 기준", "제재 기준", "규정 위반"],
+    "비용·과금": ["가격", "과금", "수수료", "환불", "구독료", "결제 오류", "결제"],
+    "창작·권리": ["저작권", "창작자", "크리에이터", "2차 창작", "저작인격권", "이용 허락", "사용권"],
+    "플랫폼 운영": ["플랫폼 정책", "추천 알고리즘", "서비스 정책", "이용 제한", "계정 정지", "플랫폼 제재", "서비스 운영 정책"],
+    "게임 경험": ["게임 패치", "게임 버그", "게임 밸런스", "게임 서버", "확률형 아이템", "게임 업데이트", "e스포츠", "게임 플레이"],
 }
 SENSITIVE_TERMS = ["신상", "실명", "주소", "전화번호", "가족", "사생활", "자택", "개인정보 유출", "피해자 신상"]
 RUMOR_TERMS = ["루머", "카더라", "폭로", "의혹", "주장", "미확인", "단독"]
@@ -231,10 +231,37 @@ def similarity(a: str, b: str) -> float:
     return len(aa & bb) / len(aa | bb)
 
 
+CLUSTER_STOPWORDS = {
+    "관련", "추진", "발표", "밝혀", "밝혔다", "예정", "전망",
+    "논란", "논의", "정부", "오늘", "내일", "이번", "최근",
+    "지난", "올해", "내년", "국내", "업계", "시장", "소식",
+    "종합", "속보", "단독", "기자", "뉴스", "등", "통해",
+}
+
+
+def cluster_tokens(title: str) -> set[str]:
+    return {
+        token
+        for token in tokens(title)
+        if token not in CLUSTER_STOPWORDS
+    }
+
+
+def cluster_similarity(a: str, b: str) -> float:
+    aa, bb = cluster_tokens(a), cluster_tokens(b)
+    if not aa or not bb:
+        return 0.0
+
+    shared = aa & bb
+    if len(shared) < 2:
+        return 0.0
+
+    return len(shared) / min(len(aa), len(bb))
+
+
 def classify(item: dict) -> tuple[str, list[str], int, str]:
     text = f"{item.get('title','')} {item.get('summary','')}".lower()
-    category_scores = {name: sum(text.count(k.lower()) for k in words) for name, words in CATEGORIES.items()}
-    category = max(category_scores, key=category_scores.get) if max(category_scores.values(), default=0) else item.get("category", "사회·생활")
+    category = item.get("category", "사회·생활")
     frames = [frame for frame, words in FRAMES.items() if any(word.lower() in text for word in words)]
     raw = 0
     published = parse_date(item.get("published_at"))
@@ -253,8 +280,43 @@ def classify(item: dict) -> tuple[str, list[str], int, str]:
     return category, frames, min(18, raw), decision
 
 
+def is_low_value_news(item: dict) -> bool:
+    title = str(item.get("title", "")).strip()
+    summary = str(item.get("summary", "")).strip()
+    text = f"{title} {summary}".lower()
+
+    low_value_terms = [
+        "[부고]",
+        "부고]",
+        "전적]",
+        "전적(",
+        "승패",
+        "경기 결과",
+        "강풍주의보",
+        "호우주의보",
+        "대설주의보",
+        "폭염주의보",
+        "한파주의보",
+        "건조주의보",
+        "풍랑주의보",
+        "기상특보",
+    ]
+
+    if any(term in text for term in low_value_terms):
+        return True
+
+    if title.startswith("[부고]") or title.startswith("부고"):
+        return True
+
+    if len(title) < 15 and len(summary) < 80:
+        return True
+
+    return False
+
+
 def build_candidates(items: list[dict]) -> list[dict]:
     now = datetime.now(timezone.utc)
+    items = [item for item in items if not is_low_value_news(item)]
     groups: list[list[dict]] = []
     for item in items:
         dt = parse_date(item.get("published_at")) or now
@@ -265,7 +327,13 @@ def build_candidates(items: list[dict]) -> list[dict]:
             anchor_dt = parse_date(anchor.get("published_at")) or now
             same_url = normalize_url(url) == normalize_url(anchor["url"])
             near = abs((dt - anchor_dt).total_seconds()) <= 48 * 3600
-            if same_url or (near and similarity(item["title"], anchor["title"]) >= 0.55):
+            same_category = item.get("category") == anchor.get("category")
+            same_event = (
+                near
+                and same_category
+                and cluster_similarity(item["title"], anchor["title"]) >= 0.5
+            )
+            if same_url or same_event:
                 matched = group
                 break
         if matched is None:
@@ -276,6 +344,8 @@ def build_candidates(items: list[dict]) -> list[dict]:
     for idx, group in enumerate(groups, start=1):
         primary = sorted(group, key=lambda x: parse_date(x.get("published_at")) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)[0]
         category, frames, raw, decision = classify(primary)
+        if decision == "exclude":
+            continue
         unique_sources = sorted({x.get("source_name", "") for x in group if x.get("source_name")})
         score = round((raw / 18) * 100)
         text = f"{primary.get('title','')} {primary.get('summary','')}"
