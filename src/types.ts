@@ -1,4 +1,5 @@
 export type Source = {
+  kind?: "rss" | "community";
   name: string;
   url: string;
   tier: "official" | "professional" | "approved_feed";
@@ -14,7 +15,7 @@ export type Candidate = {
   decision: "candidate" | "manual_review" | "exclude";
   content_type: "news" | "official" | "community" | "trend" | "meme" | "rumor";
   source_type: "media" | "official" | "community";
-  collection_method: "rss" | "api" | "approved_feed" | "manual";
+  collection_method: "rss" | "api" | "approved_feed" | "manual" | "public_list";
   usage_status: "official_feed" | "review_required" | "permission_required" | "blocked";
   score: number;
   score_raw: number;
@@ -32,6 +33,7 @@ export type Candidate = {
   keywords: string[];
   source_count: number;
   frames: string[];
+  engagement?: { recommendations: number; comments: number; views: number } | null;
   why_now?: string;
   confirmed_facts?: string[];
   discussion_points?: string[];

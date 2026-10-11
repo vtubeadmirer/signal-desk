@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { parseBackup, serializeBackup, writeStorageAtomically, sourceValid, type DeskBackup } from "./backup";
+import { readBackupFile, saveBackupFile } from "./backupFiles";
 import { analyze, collect, health } from "./agent";
 import type { ArticleRecord, Candidate, PersonalizationProfile, Source } from "./types";
 
 const STORAGE_KEY = "signal-desk:sources:v1";
 const PROVIDER_KEY = "signal-desk:provider:v1";
 const ARTICLES_KEY = "signal-desk:articles:v1";
+const DATE_KEY = "signal-desk:broadcast-date:v1";
+const COMMUNITY_MIGRATION_KEY = "signal-desk:community-sources:v1";
 
 function articleId(url: string): string {
   return url.trim().split("#", 1)[0].replace(/\/+$/, "");
@@ -52,7 +56,16 @@ function loadSavedArticles(): ArticleRecord[] {
   }
 }
 
+const COMMUNITY_SOURCES: Source[] = [
+  { name: "디시 버츄얼 스트리머 개념글", url: "https://gall.dcinside.com/mini/board/lists/?id=virtual_streamer&exception_mode=recommend", kind: "community", tier: "approved_feed", category: "버튜버·크리에이터", enabled: true },
+  { name: "디시 치지직 개념글", url: "https://gall.dcinside.com/mgallery/board/lists/?id=chzzk&exception_mode=recommend", kind: "community", tier: "approved_feed", category: "IT·플랫폼", enabled: true },
+  { name: "디시 중세게임 개념글", url: "https://gall.dcinside.com/mgallery/board/lists/?id=aoegame&exception_mode=recommend", kind: "community", tier: "approved_feed", category: "게임·인터넷 방송", enabled: true },
+  { name: "루리웹 유머 베스트", url: "https://bbs.ruliweb.com/best/humor", kind: "community", tier: "approved_feed", category: "커뮤니티·밈", enabled: true },
+  { name: "펨코 포텐 화제순", url: "https://www.fmkorea.com/best2", kind: "community", tier: "approved_feed", category: "커뮤니티·밈", enabled: true },
+];
+
 const DEFAULT_SOURCES: Source[] = [
+  ...COMMUNITY_SOURCES,
   {
     name: "전자신문 IT",
     url: "https://rss.etnews.com/03.xml",
@@ -118,12 +131,13 @@ const DEFAULT_SOURCES: Source[] = [
   },
 ];
 
-const CATEGORIES = ["전체", "사회·생활", "버튜버·크리에이터", "IT·플랫폼", "시청자 권리·안전", "게임·인터넷 방송"];
+const CATEGORIES = ["전체", "사회·생활", "버튜버·크리에이터", "IT·플랫폼", "시청자 권리·안전", "게임·인터넷 방송", "커뮤니티·밈"];
 
 function loadSources(): Source[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Source[]) : DEFAULT_SOURCES;
+    const parsed: unknown = raw ? JSON.parse(raw) : DEFAULT_SOURCES;
+    return Array.isArray(parsed) && parsed.length <= 50 && parsed.every(sourceValid) ? parsed : DEFAULT_SOURCES;
   } catch {
     return DEFAULT_SOURCES;
   }
@@ -140,14 +154,14 @@ function summaryPreview(value?: string | null): string {
 
 export default function App() {
   const [tab, setTab] = useState<"today" | "prep" | "archive" | "settings">("today");
-  const [settingsSection, setSettingsSection] = useState<"sources" | "rules" | "security">("sources");
+  const [settingsSection, setSettingsSection] = useState<"sources" | "rules" | "security" | "backup">("sources");
   const [sources, setSources] = useState<Source[]>(loadSources);
   const [provider, setProvider] = useState(localStorage.getItem(PROVIDER_KEY) ?? "codex");
   const [status, setStatus] = useState("준비됨");
   const [providerStatus, setProviderStatus] = useState<{ installed: boolean; authenticated?: boolean; version?: string; auth_hint?: string } | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [savedArticles, setSavedArticles] = useState<ArticleRecord[]>(loadSavedArticles);
-  const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(localDateKey);
+  const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(() => localStorage.getItem(DATE_KEY) || localDateKey());
   const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
   const [archiveQuery, setArchiveQuery] = useState("");
   const [filter, setFilter] = useState("전체");
@@ -156,6 +170,18 @@ export default function App() {
   const [lastRun, setLastRun] = useState<string>("");
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupStatus, setBackupStatus] = useState("");
+  const [pendingBackup, setPendingBackup] = useState<DeskBackup | null>(null);
+
+  useEffect(() => {
+    if (!localStorage.getItem(COMMUNITY_MIGRATION_KEY)) {
+      setSources((current) => [...current, ...COMMUNITY_SOURCES.filter((preset) => !current.some((source) => source.url === preset.url))].slice(0, 50));
+      localStorage.setItem(COMMUNITY_MIGRATION_KEY, "1");
+    }
+  }, []);
+
+  useEffect(() => { localStorage.setItem(DATE_KEY, selectedBroadcastDate); }, [selectedBroadcastDate]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sources));
@@ -166,7 +192,8 @@ export default function App() {
   }, [provider]);
 
   useEffect(() => {
-    localStorage.setItem(ARTICLES_KEY, JSON.stringify(savedArticles));
+    try { localStorage.setItem(ARTICLES_KEY, JSON.stringify(savedArticles)); }
+    catch { setStatus("보관함을 저장하지 못했습니다. 저장 공간을 확인하고 백업 내보내기로 내용을 보존하세요."); }
   }, [savedArticles]);
 
   async function refreshHealth() {
@@ -404,6 +431,53 @@ export default function App() {
     ]);
   }
 
+  function backupData() {
+    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate };
+  }
+
+  async function exportBackup() {
+    setBackupBusy(true);
+    try {
+      const saved = await saveBackupFile(serializeBackup(backupData()));
+      setBackupStatus(saved ? "백업을 저장했습니다. 다른 PC의 Signal Desk에서 이 파일을 불러오세요." : "내보내기를 취소했습니다.");
+    } catch (error) { setBackupStatus(error instanceof Error ? error.message : "백업 저장에 실패했습니다."); }
+    finally { setBackupBusy(false); }
+  }
+
+  async function importBackup() {
+    setBackupBusy(true);
+    try {
+      const raw = await readBackupFile();
+      if (raw === null) { setBackupStatus("불러오기를 취소했습니다."); return; }
+      setPendingBackup(parseBackup(raw));
+      setBackupStatus("백업 내용을 확인한 뒤 복원하세요. 현재 보관함과 설정이 백업 내용으로 교체됩니다.");
+    } catch (error) { setBackupStatus(error instanceof Error ? error.message : "백업을 읽지 못했습니다."); }
+    finally { setBackupBusy(false); }
+  }
+
+  function restoreBackup() {
+    if (!pendingBackup) return;
+    try {
+      writeStorageAtomically(localStorage, {
+        [ARTICLES_KEY]: JSON.stringify(pendingBackup.articles),
+        [STORAGE_KEY]: JSON.stringify(pendingBackup.sources),
+        [PROVIDER_KEY]: pendingBackup.provider,
+        [DATE_KEY]: pendingBackup.selectedBroadcastDate,
+        [COMMUNITY_MIGRATION_KEY]: "1",
+      });
+      setSavedArticles(pendingBackup.articles);
+      setSources(pendingBackup.sources);
+      setProvider(pendingBackup.provider);
+      setSelectedBroadcastDate(pendingBackup.selectedBroadcastDate);
+      setCandidates([]);
+      setLastRun("");
+      setArchiveQuery("");
+      setFilter("전체");
+      setPendingBackup(null);
+      setBackupStatus("보관함·방송 준비·소스 설정을 복원했습니다. AI 로그인은 이 PC에서 연결하세요.");
+    } catch { setBackupStatus("저장 공간이 부족하거나 저장소에 접근할 수 없어 복원하지 못했습니다. 기존 데이터는 유지됩니다."); }
+  }
+
   function restoreDefaultSources() {
     setSources(DEFAULT_SOURCES.map((source) => ({ ...source })));
   }
@@ -420,7 +494,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <div className="brand">SIGNAL DESK</div>
+          <div className="brand">SIGNAL DESK <small>v0.2.0</small></div>
           <div className="subtitle">오늘 방송에서 이야기할 만한 신호만 압축합니다.</div>
         </div>
         <div className="top-actions">
@@ -442,9 +516,10 @@ export default function App() {
             <div>
               <span className="eyebrow">TODAY'S SIGNALS</span>
               <h1>오늘 이야기하기 좋은 것</h1>
-              <p>우선 추천 10개를 먼저 보고, 필요하면 추가 후보 10개까지 확인할 수 있습니다.</p>
+              <p>뉴스와 커뮤니티 화제를 함께 선별합니다. 적합한 후보가 부족하면 개수를 억지로 채우지 않습니다.</p>
             </div>
             <div className="hero-actions">
+              <button className="secondary" onClick={() => { setTab("settings"); setSettingsSection("backup"); }}>백업·복원</button>
               <button className="primary" disabled={running || sources.every((s) => !s.enabled)} onClick={runCollection}>
                 {running ? "처리 중…" : "뉴스 가져오기"}
               </button>
@@ -482,21 +557,23 @@ export default function App() {
             {filtered.length === 0 ? (
               <div className="empty-card">
                 <strong>아직 후보가 없습니다.</strong>
-                <span>뉴스 소스에서 허용된 RSS/Atom 피드를 하나 이상 활성화한 뒤 「뉴스 가져오기」를 누르세요.</span>
+                <span>뉴스 소스에서 RSS/Atom 또는 커뮤니티 소스를 하나 이상 활성화한 뒤 「뉴스 가져오기」를 누르세요.</span>
               </div>
             ) : visibleCandidates.map((item) => (
               <article className="signal-card" key={item.event_id}>
                 <div className="signal-meta">
                   <span className="badge">{item.category}</span>
+                  {item.source_type === "community" && <span className="badge">커뮤니티 화제 · 원문 확인 필요</span>}
                   <span className={`decision ${item.decision}`}>{item.decision === "candidate" ? "검토 후보" : item.decision === "manual_review" ? "추가 확인" : "제외"}</span>
                 </div>
                 <h2>{item.title}</h2>
+                {item.engagement && <p className="community-metrics">목록 기준 추천 {item.engagement.recommendations} · 댓글 {item.engagement.comments}</p>}
                 <p className="summary">
                   {summaryPreview(item.why_now?.trim() || item.summary?.trim())}
                 </p>
                 <details className="article-details">
-                  <summary>RSS에서 수집한 내용 더 보기</summary>
-                  <p>{item.summary?.trim() || "이 RSS 피드에는 별도의 본문이나 요약이 제공되지 않았습니다. 원문에서 확인해 주세요."}</p>
+                  <summary>수집한 내용 더 보기</summary>
+                  <p>{item.summary?.trim() || "수집 소스가 별도의 본문이나 요약을 제공하지 않았습니다. 원문에서 확인해 주세요."}</p>
                 </details>
                 <div className="metrics">
                   <span>점수 {item.score}</span>
@@ -611,6 +688,7 @@ export default function App() {
                     <span className="decision candidate">점수 {record.candidate.score}</span>
                   </div>
                   <h2>{record.candidate.title}</h2>
+                  {record.candidate.caveats?.length ? <details className="article-details"><summary>방송 전 확인할 주의사항</summary><ul>{record.candidate.caveats.map((caveat, index) => <li key={index}>{caveat}</li>)}</ul></details> : null}
                   <p className="summary">{summaryPreview(record.candidate.why_now?.trim() || record.candidate.summary)}</p>
                   {record.labels.length > 0 && (
                     <div className="personal-labels">
@@ -740,9 +818,35 @@ export default function App() {
           <nav className="settings-subtabs">
             <button className={settingsSection === "sources" ? "active" : ""} onClick={() => setSettingsSection("sources")}>뉴스 소스</button>
             <button className={settingsSection === "rules" ? "active" : ""} onClick={() => setSettingsSection("rules")}>뉴스 선별</button>
+            <button className={settingsSection === "backup" ? "active" : ""} onClick={() => setSettingsSection("backup")}>백업·복원</button>
             <button className={settingsSection === "security" ? "active" : ""} onClick={() => setSettingsSection("security")}>보안</button>
           </nav>
         </div>
+      )}
+
+      {tab === "settings" && settingsSection === "backup" && (
+        <main className="content narrow">
+          <section className="panel">
+            <h1>백업·복원</h1>
+            <p>보관함의 기사·AI 분석·관심 표시·라벨·메모·방송 날짜와 수집 소스를 JSON 파일 하나로 옮깁니다. 다른 PC에도 같은 앱 버전에서 그대로 복원할 수 있습니다.</p>
+            <p>현재 보관함 {savedArticles.length}개 · 수집 소스 {sources.length}개. AI 인증정보는 백업에 포함되지 않습니다.</p>
+            <div className="saved-card-actions">
+              <button className="primary" disabled={backupBusy || running} onClick={() => void exportBackup()}>백업 내보내기</button>
+              <button className="secondary" disabled={backupBusy || running} onClick={() => void importBackup()}>백업 불러오기</button>
+            </div>
+            <p role="status">{backupStatus}</p>
+            {pendingBackup && <div className="backup-preview">
+              <h2>복원할 백업 확인</h2>
+              <p>내보낸 시각: {new Date(pendingBackup.exportedAt).toLocaleString("ko-KR")}</p>
+              <p>기사 {pendingBackup.articles.length}개 · 방송 준비 {pendingBackup.articles.filter((record) => record.broadcastDates.length > 0).length}개 · 소스 {pendingBackup.sources.length}개</p>
+              <p>복원하면 현재 보관함과 소스 설정을 교체합니다. 기존 내용을 보존하려면 먼저 백업 내보내기를 사용하세요.</p>
+              <div className="saved-card-actions">
+                <button className="primary" disabled={backupBusy || running} onClick={restoreBackup}>백업 내용으로 복원</button>
+                <button className="secondary" onClick={() => setPendingBackup(null)}>취소</button>
+              </div>
+            </div>}
+          </section>
+        </main>
       )}
 
       {tab === "settings" && settingsSection === "sources" && (
@@ -755,6 +859,7 @@ export default function App() {
                 <p>공개되어 있다는 이유만으로 재사용 권한이 생기는 것은 아닙니다. 실제 이용이 허용된 RSS/Atom/공식 피드만 활성화하세요.</p>
               </div>
               <div className="panel-actions">
+                <button className="secondary" onClick={() => setSources((current) => [...current, ...COMMUNITY_SOURCES.filter((preset) => !current.some((source) => source.url === preset.url))].slice(0, 50))}>커뮤니티 소스 추가</button>
                 <button className="secondary" onClick={restoreDefaultSources}>기본 소스 복원</button>
                 <button className="secondary" onClick={addSource}>소스 추가</button>
               </div>
@@ -765,10 +870,11 @@ export default function App() {
                   <input type="checkbox" checked={source.enabled} onChange={(e) => updateSource(index, { enabled: e.target.checked })} aria-label="소스 활성화" />
                   <input value={source.name} onChange={(e) => updateSource(index, { name: e.target.value })} aria-label="소스명" />
                   <input value={source.url} onChange={(e) => updateSource(index, { url: e.target.value })} aria-label="RSS URL" />
-                  <select value={source.tier} onChange={(e) => updateSource(index, { tier: e.target.value as Source["tier"] })}>
+                  <select aria-label="수집 방식" value={source.kind ?? "rss"} onChange={(e) => updateSource(index, { kind: e.target.value as Source["kind"] })}><option value="rss">RSS / Atom</option><option value="community">커뮤니티 인기글</option></select>
+                  <select disabled={source.kind === "community"} value={source.tier} onChange={(e) => updateSource(index, { tier: e.target.value as Source["tier"] })}>
                     <option value="official">공식</option>
                     <option value="professional">전문매체</option>
-                    <option value="approved_feed">허가 피드</option>
+                    <option value="approved_feed">{source.kind === "community" ? "공개 목록" : "허가 피드"}</option>
                   </select>
                   <select value={source.category} onChange={(e) => updateSource(index, { category: e.target.value })}>
                     {CATEGORIES.slice(1).map((c) => <option key={c}>{c}</option>)}
@@ -793,12 +899,12 @@ export default function App() {
             </div>
             <div className="rules-list">
               <div className="rule-item">
-                <strong>일반 정치 뉴스</strong>
-                <p>등록된 정치 관련 키워드에 해당하고 업계 직접 관련성이 감지되지 않은 기사는 최하위 점수인 0점을 받습니다.</p>
+                <strong>범죄·피해 사건과 일반 정치 뉴스 제외</strong>
+                <p>살해·살인미수·실종·흉기·납치·성범죄·신상털기 등 피해 중심 사건과 업계에 직접 관련되지 않은 일반 정치 뉴스는 후보에서 제외합니다.</p>
               </div>
               <div className="rule-item">
                 <strong>국가적 비상사태</strong>
-                <p>계엄령, 국가 비상사태, 전쟁 발발, 쿠데타 등 등록된 예외 키워드는 일반 정치 뉴스 규칙보다 우선합니다.</p>
+                <p>대한민국에서 발생한 국가적 비상사태만 예외로 다룹니다. 해외 비상사태와 국가가 불명확한 기사는 제외합니다.</p>
               </div>
               <div className="rule-item">
                 <strong>스트리머 관련 산업 뉴스</strong>

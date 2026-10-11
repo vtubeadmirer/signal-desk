@@ -371,7 +371,7 @@ class SignalDeskSecurityTests(unittest.TestCase):
         self.assertNotIn("<p>", result[0]["summary"])
 
 
-    def test_generic_political_news_gets_minimum_score(self):
+    def test_generic_political_news_is_excluded(self):
         items = [{
             "title": "여야, 국회에서 예산안을 두고 충돌",
             "summary": "정당 간 정치 공방이 이어지고 있다.",
@@ -386,14 +386,11 @@ class SignalDeskSecurityTests(unittest.TestCase):
             "usage_status": "review_required",
         }]
         out = build_candidates(items)
-        self.assertEqual(len(out), 1)
-        self.assertEqual(out[0]["score"], 0)
-        self.assertEqual(out[0]["score_raw"], 0)
-        self.assertTrue(out[0]["political_penalty"])
+        self.assertEqual(out, [])
 
     def test_national_emergency_is_not_given_political_floor(self):
         items = [{
-            "title": "대통령, 비상계엄 선포로 국가 비상사태 발표",
+            "title": "대한민국 대통령, 비상계엄 선포로 국가 비상사태 발표",
             "summary": "국가적 비상사태 대응이 시작됐다.",
             "url": "https://example.com/emergency",
             "published_at": "2026-10-11T07:00:00+00:00",

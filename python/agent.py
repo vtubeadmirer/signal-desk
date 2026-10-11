@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 import traceback
+import time
+import math
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
@@ -18,6 +20,8 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 import xml.etree.ElementTree as ET
 
+from community import community_site, parse_community, robots_allowed
+from editorial import emergency_scope, excluded_topic
 from security import MAX_FEED_BYTES, MAX_INPUT_BYTES, resolve_public_url, safe_text, validate_https_resource_url, validate_public_url
 
 
@@ -197,8 +201,8 @@ def _fetch_pinned_https(url: str, host: str, ip_addresses: list[str]) -> bytes:
                 "GET",
                 path,
                 headers={
-                    "User-Agent": "SignalDesk/0.1",
-                    "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9",
+                    "User-Agent": "SignalDesk/0.2",
+                    "Accept": "application/rss+xml, application/atom+xml, application/xml, text/html, text/plain, text/xml;q=0.9",
                     "Accept-Encoding": "identity",
                     "Connection": "close",
                 },
@@ -227,7 +231,30 @@ def _fetch_pinned_https(url: str, host: str, ip_addresses: list[str]) -> bytes:
     raise ValueError("피드 서버 연결에 실패했습니다.")
 
 
+_community_cache: dict[str, tuple[float, bytes, datetime]] = {}
+
+
 def fetch_source(source: dict) -> list[dict]:
+    if source.get("kind") == "community":
+        community_site(str(source.get("url", "")))
+        url, host, addresses = resolve_public_url(source["url"])
+        cached = _community_cache.get(url)
+        if cached and time.monotonic() - cached[0] < 300:
+            return parse_community(cached[1], source, cached[2])
+        robots_url, robots_host, robots_addresses = resolve_public_url(f"https://{host}/robots.txt")
+        robots = _fetch_pinned_https(robots_url, robots_host, robots_addresses).decode("utf-8", "replace")
+        if not robots_allowed(robots, url):
+            raise ValueError("공개 목록 수집이 robots.txt에서 제한되었습니다.")
+        data = _fetch_pinned_https(url, host, addresses)
+        fetched_at = datetime.now(timezone.utc)
+        items = parse_community(data, source, fetched_at)
+        if not items:
+            raise ValueError("목록을 읽지 못했습니다. 접근 제한 또는 페이지 변경을 확인하세요.")
+        if len(_community_cache) >= 50:
+            _community_cache.pop(next(iter(_community_cache)))
+        _community_cache[url] = (time.monotonic(), data, fetched_at)
+        return items
+
     url, host, addresses = resolve_public_url(str(source.get("url", "")))
     data = _fetch_pinned_https(url, host, addresses)
     return parse_feed(data, source)
@@ -368,6 +395,11 @@ def classify(item: dict) -> tuple[str, list[str], int, str]:
         elif 24 < hours <= 48:
             raw += 1
 
+    if item.get("source_type") == "community":
+        category = category if relevance else item.get("category", "커뮤니티·밈")
+        relevance = max(relevance, 3)
+        raw += min(3, int(math.log10(1 + max(0, item.get("engagement", {}).get("recommendations", 0)))))
+
     raw += relevance
     raw += min(3, len(frames))
 
@@ -376,8 +408,8 @@ def classify(item: dict) -> tuple[str, list[str], int, str]:
     elif item.get("tier") == "professional":
         raw += 1
 
-    decision = "candidate"
-    if any(term in text for term in SENSITIVE_TERMS):
+    decision = "manual_review" if item.get("source_type") == "community" else "candidate"
+    if excluded_topic(item) or emergency_scope(item) == "foreign_or_unknown" or any(term in text for term in SENSITIVE_TERMS):
         decision = "exclude"
     elif any(term in text for term in RUMOR_TERMS):
         decision = "manual_review"
@@ -392,14 +424,7 @@ def political_score_rule(item: dict) -> str:
     summary = str(item.get("summary", ""))
     text = f"{title} {summary}".lower()
 
-    # 국가적 비상사태는 일반 정치 뉴스 점수 제한에서 예외 처리합니다.
-    emergency_terms = [
-        "비상계엄", "계엄령", "계엄 선포", "국가 비상사태",
-        "국가비상사태", "국가안보 위기", "국가 안보 위기",
-        "국가재난사태", "국가 재난 사태", "대규모 국가 재난",
-        "전쟁 발발", "전면전", "군사 침공", "쿠데타",
-    ]
-    if any(term in text for term in emergency_terms):
+    if emergency_scope(item) == "domestic":
         return "emergency"
 
     # 크리에이터·게임·플랫폼 업계에 직접 관련된 정책 뉴스는 보존합니다.
@@ -505,7 +530,7 @@ def is_low_value_news(item: dict) -> bool:
     if title.startswith("[부고]") or title.startswith("부고"):
         return True
 
-    if len(title) < 15 and len(summary) < 80:
+    if item.get("source_type") != "community" and len(title) < 15 and len(summary) < 80:
         return True
 
     return False
@@ -515,6 +540,8 @@ def build_candidates(items: list[dict], personalization: dict | None = None) -> 
     now = datetime.now(timezone.utc)
     items = [item for item in items
              if not is_low_value_news(item)
+             and not excluded_topic(item)
+             and emergency_scope(item) != "foreign_or_unknown"
              and (published := parse_date(item.get("published_at"))) is not None
              and timedelta(minutes=-5) <= now - published <= timedelta(hours=48)]
     groups: list[list[dict]] = []
@@ -571,6 +598,8 @@ def build_candidates(items: list[dict], personalization: dict | None = None) -> 
         unique_sources = sorted({x.get("source_name", "") for x in group if x.get("source_name")})
         base_score = round((raw / 18) * 100)
         political_rule = political_score_rule(primary)
+        if political_rule == "political":
+            continue
         personal_bonus = calculate_personalization_bonus(
             primary, category, personalization
         )
@@ -619,6 +648,8 @@ def build_candidates(items: list[dict], personalization: dict | None = None) -> 
             "keywords": list(tokens(primary.get("title", "")))[:12],
             "source_count": len(unique_sources),
             "frames": frames,
+            "engagement": primary.get("engagement"),
+            "caveats": primary.get("caveats", []),
         })
     output.sort(key=lambda x: (-x["score"], x["verification_cost"], -x["source_count"]))
     for i, item in enumerate(output, start=1):
@@ -722,7 +753,7 @@ def ai_analyze(candidates: list[dict]) -> list[dict]:
         merged: list[dict] = []
         for item in candidates:
             extra = updates.get(item["event_id"], {})
-            merged.append({**item, **extra})
+            merged.append({**item, **extra, "caveats": list(dict.fromkeys(item.get("caveats", []) + extra.get("caveats", [])))})
         return merged
 
 
@@ -746,7 +777,8 @@ def handle(request: dict) -> dict:
             try:
                 items.extend(fetch_source(source))
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{safe_text(str(source.get('name','source')),100)}: 피드 수집 실패")
+                reason = str(exc) if source.get("kind") == "community" and isinstance(exc, ValueError) else "피드 수집 실패"
+                errors.append(f"{safe_text(str(source.get('name','source')),100)}: {safe_text(reason, 200)}")
         personalization = request.get("personalization", {})
         if not isinstance(personalization, dict):
             personalization = {}

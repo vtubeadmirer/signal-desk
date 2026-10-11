@@ -1,4 +1,4 @@
-# Signal Desk — Secure Desktop v0.1
+# Signal Desk — Secure Desktop v0.2
 
 Signal Desk is a local-first Windows desktop prototype for broadcast-news curation.
 
@@ -87,3 +87,20 @@ The analysis prompt alone does not enforce tool or filesystem isolation. Updater
 ## Development Windows builds
 
 The build-windows workflow runs for main pushes, pull requests, and manual dispatches. It uses src-tauri/tauri.dev-build.conf.json to disable updater artifact signing for development installers. Installer and portable artifacts are uploaded only after successful build steps. The protected release workflow continues to require updater and Windows signing keys. Development packages are unsigned and should be downloaded manually from Actions; they are not updater releases.
+
+## v0.2: community signals and portable backups
+
+- Default community lists: DCInside Virtual Streamer, Chzzk and AoeGame recommended lists; Ruliweb humor best; FMKorea best2. Existing users receive the presets once, preserving their existing RSS settings. Sources can be disabled or their supported list URLs changed in Settings.
+- Collection reads one public list page per source on explicit collection requests, honors current robots.txt rules, pins public DNS addresses, and caches successful pages for five minutes. No login cookies, challenge bypass, post bodies, comments, author profiles, images or attachments are collected. Blocked or changed pages report a collection error. FMKorea post links are for the user to open, not automatic post fetching.
+- Title, publication time inferred from list metadata, original link and list recommendation/comment/view counts are retained. Counts measure activity, not truth. Community items always require manual review. Title-only screening cannot identify harmful material hidden in a post body; inspect the original before broadcasting.
+- Crime/victim incidents, personal harassment and adult-content keywords are excluded before scoring. General political stories are excluded; direct creator/game/platform policy stories remain eligible. Emergency exceptions require explicit South Korean context in the supplied metadata. Foreign and unclear emergencies are excluded. This is conservative text matching, not a geopolitical fact checker.
+- Settings → Backup/Restore exports saved articles, AI results, interests, labels, notes, broadcast dates, source configuration and the selected broadcast date to versioned JSON. Restore validates the file, previews its contents and replaces current data only when the user clicks Restore. Export current data first if it should be retained. Provider credentials are excluded; log in separately on the other PC.
+- Backups are limited to 4 MB and 2,000 saved articles. File access is scoped to paths selected by native file dialogs. A storage write failure rolls back the previous values. The backup carries saved data, not the transient current-news collection or the full external source content.
+
+Verification commands:
+
+```powershell
+python -m unittest discover -s python/tests
+node --test tests/agent.test.cjs tests/backup.test.cjs
+npm run build
+```
