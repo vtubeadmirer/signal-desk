@@ -239,10 +239,31 @@ CLUSTER_STOPWORDS = {
 }
 
 
+EVENT_TOKEN_ALIASES = {
+    "기념우표": "우표",
+    "우표에": "우표",
+    "우표가": "우표",
+    "우표를": "우표",
+    "우표로": "우표",
+    "기획전시관도": "전시관",
+    "기획전시관": "전시관",
+    "전시관도": "전시관",
+}
+
+EVENT_CLUSTER_TOKENS = {
+    "우표", "전시관", "데뷔", "졸업", "업데이트",
+    "출시", "패치", "수수료", "결승", "인수",
+}
+
+
 def cluster_tokens(title: str) -> set[str]:
+    normalized = {
+        EVENT_TOKEN_ALIASES.get(token, token)
+        for token in tokens(title)
+    }
     return {
         token
-        for token in tokens(title)
+        for token in normalized
         if token not in CLUSTER_STOPWORDS
     }
 
@@ -260,23 +281,94 @@ def cluster_similarity(a: str, b: str) -> float:
 
 
 def classify(item: dict) -> tuple[str, list[str], int, str]:
-    text = f"{item.get('title','')} {item.get('summary','')}".lower()
+    title = str(item.get("title", ""))
+    summary = str(item.get("summary", ""))
+    title_text = title.lower()
+    text = f"{title} {summary}".lower()
+
+    # 제목의 직접적인 주제를 우선합니다.
+    # 일반적인 단어 하나만으로 크리에이터 뉴스로 분류하지 않습니다.
+    topics = [
+        ("버튜버·크리에이터", [
+            "버튜버", "버추얼 유튜버", "버추얼 스트리머",
+            "인터넷 방송인", "스트리머 데뷔", "크리에이터 데뷔",
+            "버튜버 데뷔", "버튜버 졸업", "버추얼 그룹",
+            "버튜버 팬미팅", "스트리머 방송",
+        ], 8),
+        ("IT·플랫폼", [
+            "치지직", "soop", "트위치", "유튜브 라이브",
+            "스트리밍 플랫폼", "방송 플랫폼", "후원 수수료",
+            "구독 수익", "플랫폼 정책", "방송 정책",
+        ], 6),
+        ("게임·인터넷 방송", [
+            "게임 업데이트", "게임 패치", "게임 밸런스",
+            "게임 서버", "확률형 아이템", "e스포츠",
+            "신작 게임", "게임 출시", "게임 대회",
+            "페이커", "리그 오브 레전드", "롤 대회",
+        ], 5),
+        ("IT·플랫폼", [
+            "생성형 ai", "ai 영상 생성", "ai 이미지 생성",
+            "영상 생성 도구", "이미지 생성 도구", "음성 생성",
+            "comfyui", "미드저니", "midjourney", "runway",
+            "suno", "flux 모델",
+        ], 6),
+        ("시청자 권리·안전", [
+            "개인정보 유출", "저작권 침해", "결제 오류",
+            "계정 정지", "이용자 보호", "청소년 보호",
+            "보안 취약점", "방송 저작권",
+        ], 4),
+    ]
+
     category = item.get("category", "사회·생활")
-    frames = [frame for frame, words in FRAMES.items() if any(word.lower() in text for word in words)]
+    relevance = 0
+
+    # 제목에 나타난 직접적인 주제부터 검사합니다.
+    for topic_category, words, points in topics:
+        if any(word.lower() in title_text for word in words):
+            category = topic_category
+            relevance = points
+            break
+
+    # 제목에 주제가 없을 때만 요약을 보조적으로 사용합니다.
+    if relevance == 0:
+        for topic_category, words, points in topics:
+            if any(word.lower() in text for word in words):
+                category = topic_category
+                relevance = max(2, points - 2)
+                break
+
+    # 제목이나 요약에 일반 단어가 등장했다는 이유만으로
+    # 크리에이터 관련성이 높아지지 않도록 합니다.
+    frames = [
+        frame for frame, words in FRAMES.items()
+        if any(word.lower() in text for word in words)
+    ]
+
     raw = 0
     published = parse_date(item.get("published_at"))
     if published:
         hours = (datetime.now(timezone.utc) - published).total_seconds() / 3600
-        if hours <= 6: raw += 4
-        elif hours <= 24: raw += 3
-        elif hours <= 48: raw += 1
-    raw += min(4, len(frames))
-    raw += 3 if category in CATEGORIES else 0
-    if item.get("tier") == "official": raw += 2
-    elif item.get("tier") == "professional": raw += 1
+        if 0 <= hours <= 6:
+            raw += 4
+        elif 6 < hours <= 24:
+            raw += 3
+        elif 24 < hours <= 48:
+            raw += 1
+
+    raw += relevance
+    raw += min(3, len(frames))
+
+    if item.get("tier") == "official":
+        raw += 2
+    elif item.get("tier") == "professional":
+        raw += 1
+
     decision = "candidate"
-    if any(term in text for term in SENSITIVE_TERMS): decision = "exclude"
-    elif any(term in text for term in RUMOR_TERMS): decision = "manual_review"
+    if any(term in text for term in SENSITIVE_TERMS):
+        decision = "exclude"
+    elif any(term in text for term in RUMOR_TERMS):
+        decision = "manual_review"
+
     return category, frames, min(18, raw), decision
 
 
@@ -321,25 +413,46 @@ def build_candidates(items: list[dict]) -> list[dict]:
     for item in items:
         dt = parse_date(item.get("published_at")) or now
         url = item["url"]
-        matched = None
+        item_tokens = cluster_tokens(item["title"])
+        matching_groups = []
+
         for group in groups:
-            anchor = group[0]
-            anchor_dt = parse_date(anchor.get("published_at")) or now
-            same_url = normalize_url(url) == normalize_url(anchor["url"])
-            near = abs((dt - anchor_dt).total_seconds()) <= 48 * 3600
-            same_category = item.get("category") == anchor.get("category")
-            same_event = (
-                near
-                and same_category
-                and cluster_similarity(item["title"], anchor["title"]) >= 0.5
-            )
-            if same_url or same_event:
-                matched = group
-                break
-        if matched is None:
+            matched_group = False
+
+            for existing in group:
+                existing_dt = parse_date(existing.get("published_at")) or now
+                same_url = normalize_url(url) == normalize_url(existing["url"])
+                near = abs((dt - existing_dt).total_seconds()) <= 48 * 3600
+
+                existing_tokens = cluster_tokens(existing["title"])
+                shared_tokens = item_tokens & existing_tokens
+                event_overlap = (
+                    len(shared_tokens) >= 3
+                    and bool(shared_tokens & EVENT_CLUSTER_TOKENS)
+                )
+                same_event = near and (
+                    cluster_similarity(item["title"], existing["title"]) >= 0.5
+                    or event_overlap
+                )
+
+                if same_url or same_event:
+                    matched_group = True
+                    break
+
+            if matched_group:
+                matching_groups.append(group)
+
+        if not matching_groups:
             groups.append([item])
-        else:
-            matched.append(item)
+            continue
+
+        target_group = matching_groups[0]
+        target_group.append(item)
+
+        for other_group in matching_groups[1:]:
+            target_group.extend(other_group)
+            groups.remove(other_group)
+
     output: list[dict] = []
     for idx, group in enumerate(groups, start=1):
         primary = sorted(group, key=lambda x: parse_date(x.get("published_at")) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)[0]

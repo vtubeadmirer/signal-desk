@@ -38,7 +38,7 @@ const DEFAULT_SOURCES: Source[] = [
   },
   {
     name: "한겨레",
-    url: "https://www.hani.co.kr/rss/",
+    url: "https://www.hani.co.kr/rss",
     tier: "professional",
     category: "사회·생활",
     enabled: true,
