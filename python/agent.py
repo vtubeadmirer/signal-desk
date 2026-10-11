@@ -783,6 +783,7 @@ def main() -> int:
             if not line.strip():
                 continue
             debug_log(f"stdin line received: {len(line)} bytes")
+            request = None
             try:
                 request = json.loads(line)
                 response = handle(request)
@@ -790,7 +791,8 @@ def main() -> int:
             except Exception as exc:
                 debug_log(f"request exception: {type(exc).__name__}: {exc}")
                 debug_log(traceback.format_exc())
-                response = {"ok": False, "op": "unknown", "error": "요청 처리 중 오류가 발생했습니다."}
+                response = {"ok": False, "op": "unknown", "error": "요청 처리 중 오류가 발생했습니다.",
+                            "request_id": request.get("request_id") if isinstance(request, dict) else None}
             sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
             sys.stdout.flush()
         debug_log("stdin reached EOF; exiting normally")
