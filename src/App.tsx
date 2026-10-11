@@ -596,7 +596,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <div className="brand">SIGNAL DESK <small>v0.3.0</small></div>
+          <div className="brand">SIGNAL DESK <small>v0.3.1</small></div>
           <div className="subtitle">오늘 방송에서 이야기할 만한 신호만 압축합니다.</div>
         </div>
         <div className="top-actions">
