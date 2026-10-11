@@ -1,4 +1,4 @@
-import { rejectionValid, MAX_REJECTIONS, type RejectedItem } from "./rejections";
+import { rejectionValid, learningValid, MAX_REJECTIONS, type RejectedItem, type LearningSettings } from "./rejections";
 import type { ArticleRecord, Candidate, Source } from "./types";
 
 export const MAX_BACKUP_BYTES = 4 * 1024 * 1024;
@@ -11,6 +11,7 @@ export type DeskBackup = {
   provider: "codex";
   selectedBroadcastDate: string;
   rejectedItems?: RejectedItem[];
+  rejectionLearning?: LearningSettings;
 };
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -47,6 +48,9 @@ export function candidateValid(value: unknown): value is Candidate {
     if (value[key] !== undefined && !strings(value[key])) return false;
   }
   if (value.why_now !== undefined && !string(value.why_now)) return false;
+  if (value.negative_matches !== undefined && !strings(value.negative_matches)) return false;
+  if (value.domestic_emergency !== undefined && typeof value.domestic_emergency !== "boolean") return false;
+  for (const key of ["score_before_negative", "negative_penalty"]) if (value[key] !== undefined && (typeof value[key] !== "number" || !Number.isFinite(value[key]) || (value[key] as number) < 0 || (value[key] as number) > 100)) return false;
   if (value.engagement !== undefined && value.engagement !== null) {
     if (!object(value.engagement) || !["recommendations", "comments", "views"].every((key) => typeof (value.engagement as Record<string, unknown>)[key] === "number")) return false;
   }
@@ -68,6 +72,7 @@ export function parseBackup(raw: string): DeskBackup {
   if (!Array.isArray(value.sources) || value.sources.length > 50 || !value.sources.every(sourceValid)) throw new Error("백업의 수집 소스가 올바르지 않습니다.");
   if (!Array.isArray(value.articles) || value.articles.length > 2000) throw new Error("백업의 기사 목록이 올바르지 않습니다.");
   if (value.rejectedItems !== undefined && (!Array.isArray(value.rejectedItems) || value.rejectedItems.length > MAX_REJECTIONS || !value.rejectedItems.every(rejectionValid) || new Set(value.rejectedItems.map((item) => item.id)).size !== value.rejectedItems.length)) throw new Error("백업의 제외 목록이 올바르지 않습니다.");
+  if (value.rejectionLearning !== undefined && !learningValid(value.rejectionLearning)) throw new Error("백업의 제외 성향 설정이 올바르지 않습니다.");
   const ids = new Set<string>();
   for (const record of value.articles) {
     if (!object(record) || !string(record.id, 2048) || !candidateValid(record.candidate) ||

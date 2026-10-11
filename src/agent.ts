@@ -1,3 +1,4 @@
+import type { NegativeRule } from "./negativePreferences";
 import { Command } from "@tauri-apps/plugin-shell";
 import type { AgentResponse, Source, Candidate, PersonalizationProfile } from "./types";
 
@@ -72,8 +73,9 @@ export async function collect(
   personalization: PersonalizationProfile = { keywords: [], categories: [], labels: [] },
   stream: "news" | "community" = "news",
   excludedHashes: string[] = [],
+  negativeRules: NegativeRule[] = [],
 ) {
-  return callAgent({ op: "collect", sources, personalization, stream, excluded_hashes: excludedHashes });
+  return callAgent({ op: "collect", sources, personalization, stream, excluded_hashes: excludedHashes, negative_rules: negativeRules });
 }
 
 export async function analyze(candidates: Candidate[], provider: string) {

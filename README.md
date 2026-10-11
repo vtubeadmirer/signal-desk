@@ -118,3 +118,13 @@ Matching uses normalized URL identity and exact normalized titles (at least eigh
 Backup format v1 includes an optional rejectedItems field; old v1 backups without it remain valid. Restore preview displays the exclusion count. Preferences are bounded to 1,000 entries and can be managed in Settings.
 
 Editorial gates now cover assassination, foreign missile/strike/death reports and explicit ethnic/gender slurs. The exception for explicitly domestic national emergencies remains for crisis-related strike/death keywords; privacy, harassment and ordinary crime exclusions remain enforced. Screening uses supplied title/summary metadata, not automatically fetched community bodies.
+
+## v0.3.0: learned rejection weights
+
+Rejected titles are now used to infer interpretable negative preferences, separately for news and community posts. No provider call is required. Shared topic patterns and specific token pairs are inferred from persisted rejection history; general terms such as game/news/meme/AI are excluded from token learning. Balanced mode requires a recognized specific topic or a token pair. Strict mode additionally permits a specific token of at least three characters.
+
+A matching rule starts at 40 points and gains 10 points per additional rejection, capped at 80. A full match of at least 40 suppresses the item before grouping/ranking/top-20 selection; partial token overlap applies a smaller penalty, with zero-score results omitted. Positive personalization cannot bring a strongly suppressed item back. Inferred rules do not hide explicitly domestic national emergencies, while exact user exclusions remain authoritative.
+
+Settings → Excluded List shows learned topics/pairs, evidence counts and maximum penalties. Toggle learning, switch strength, search/filter rules, or mute individual rules. Undoing feedback removes its contribution; remaining feedback can still support the same rule. Rules are recalculated from the history after restart and bounded to 300 per stream so community feedback cannot crowd out news feedback.
+
+Returned candidates retain their pre-penalty score and penalty explanation; collection status reports suppressed and demoted counts. Frontend rescoring avoids double penalties and restores base scores when a rule is disabled. Candidate metadata and learning settings are backed up; old format-v1 backups remain valid. The dictionary is embedded in the sidecar and a packaged IPC smoke test exercises it in Windows CI.

@@ -10,6 +10,14 @@ export type RejectedItem = {
   rejectedAt: string;
 };
 export const MAX_REJECTIONS = 1000;
+export type LearningSettings = { enabled: boolean; mode: "balanced" | "strict"; mutedRuleIds: string[] };
+export const DEFAULT_LEARNING: LearningSettings = { enabled: true, mode: "balanced", mutedRuleIds: [] };
+export function learningValid(value: unknown): value is LearningSettings {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.enabled === "boolean" && (item.mode === "balanced" || item.mode === "strict") &&
+    Array.isArray(item.mutedRuleIds) && item.mutedRuleIds.length <= 1000 && item.mutedRuleIds.every((id) => typeof id === "string" && id.length <= 200);
+}
 export const rejectionId = (url: string) => url.trim().split("#", 1)[0].replace(/\/+$/, "");
 export const normalizedTitle = (title: string) => title.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 
