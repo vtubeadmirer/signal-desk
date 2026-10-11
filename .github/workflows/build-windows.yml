@@ -37,6 +37,9 @@ jobs:
       - name: Frontend build
         run: npm run build
 
+      - name: Sidecar IPC regression tests
+        run: node --test tests/agent.test.cjs
+
       - name: Build Python sidecar
         shell: pwsh
         run: ./scripts/build-sidecar.ps1

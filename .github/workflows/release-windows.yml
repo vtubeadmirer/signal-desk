@@ -38,6 +38,9 @@ jobs:
           python -m unittest discover -s python/tests -v
           npm run build
 
+      - name: Sidecar IPC regression tests
+        run: node --test tests/agent.test.cjs
+
       - name: Build Python sidecar
         shell: pwsh
         run: ./scripts/build-sidecar.ps1
