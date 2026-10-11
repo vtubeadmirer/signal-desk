@@ -84,6 +84,15 @@ function loadSources(): Source[] {
   }
 }
 
+function summaryPreview(value?: string | null): string {
+  const text = (value ?? "").replace(/\\s+/g, " ").trim();
+  if (!text) {
+    return "요약이 제공되지 않은 기사입니다. 원문 링크에서 내용을 확인해 주세요.";
+  }
+  const limit = 320;
+  return text.length > limit ? `${text.slice(0, limit).trimEnd()}…` : text;
+}
+
 export default function App() {
   const [tab, setTab] = useState<"today" | "sources" | "security">("today");
   const [sources, setSources] = useState<Source[]>(loadSources);
@@ -92,6 +101,7 @@ export default function App() {
   const [providerStatus, setProviderStatus] = useState<{ installed: boolean; authenticated?: boolean; version?: string; auth_hint?: string } | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [filter, setFilter] = useState("전체");
+  const [showMoreCandidates, setShowMoreCandidates] = useState(false);
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState<string>("");
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
@@ -140,8 +150,10 @@ export default function App() {
 
   const filtered = useMemo(() => {
     const list = filter === "전체" ? candidates : candidates.filter((x) => x.category === filter);
-    return [...list].sort((a, b) => b.score - a.score).slice(0, 10);
+    return [...list].sort((a, b) => b.score - a.score).slice(0, 20);
   }, [candidates, filter]);
+
+  const visibleCandidates = showMoreCandidates ? filtered : filtered.slice(0, 10);
 
   async function runCollection() {
     setRunning(true);
@@ -150,6 +162,7 @@ export default function App() {
       const r = await collect(sources.filter((s) => s.enabled));
       if (!r.ok) throw new Error(r.error ?? "수집 실패");
       setCandidates(r.candidates ?? []);
+      setShowMoreCandidates(false);
       setLastRun(new Date().toLocaleString("ko-KR"));
       setStatus(`${r.candidates?.length ?? 0}개 후보를 만들었습니다.`);
     } catch (error) {
@@ -227,7 +240,7 @@ export default function App() {
             <div>
               <span className="eyebrow">TODAY'S SIGNALS</span>
               <h1>오늘 이야기하기 좋은 것</h1>
-              <p>뉴스를 많이 보여주는 대신, 사람이 확인할 가치가 있는 후보를 5~10개로 줄이는 구조입니다.</p>
+              <p>우선 추천 10개를 먼저 보고, 필요하면 추가 후보 10개까지 확인할 수 있습니다.</p>
             </div>
             <div className="hero-actions">
               <button className="primary" disabled={running || sources.every((s) => !s.enabled)} onClick={runCollection}>
@@ -242,7 +255,7 @@ export default function App() {
           <section className="control-row">
             <div className="filters">
               {CATEGORIES.map((category) => (
-                <button key={category} className={filter === category ? "filter active" : "filter"} onClick={() => setFilter(category)}>{category}</button>
+                <button key={category} className={filter === category ? "filter active" : "filter"} onClick={() => { setFilter(category); setShowMoreCandidates(false); }}>{category}</button>
               ))}
             </div>
             <div className="run-info">{lastRun ? `마지막 실행 ${lastRun}` : status}</div>
@@ -254,14 +267,20 @@ export default function App() {
                 <strong>아직 후보가 없습니다.</strong>
                 <span>뉴스 소스에서 허용된 RSS/Atom 피드를 하나 이상 활성화한 뒤 「뉴스 가져오기」를 누르세요.</span>
               </div>
-            ) : filtered.map((item) => (
+            ) : visibleCandidates.map((item) => (
               <article className="signal-card" key={item.event_id}>
                 <div className="signal-meta">
                   <span className="badge">{item.category}</span>
                   <span className={`decision ${item.decision}`}>{item.decision === "candidate" ? "검토 후보" : item.decision === "manual_review" ? "추가 확인" : "제외"}</span>
                 </div>
                 <h2>{item.title}</h2>
-                <p className="summary">{item.why_now ?? item.summary}</p>
+                <p className="summary">
+                  {summaryPreview(item.why_now?.trim() || item.summary?.trim())}
+                </p>
+                <details className="article-details">
+                  <summary>RSS에서 수집한 내용 더 보기</summary>
+                  <p>{item.summary?.trim() || "이 RSS 피드에는 별도의 본문이나 요약이 제공되지 않았습니다. 원문에서 확인해 주세요."}</p>
+                </details>
                 <div className="metrics">
                   <span>점수 {item.score}</span>
                   <span>대화성 {item.talkability}</span>
@@ -281,6 +300,18 @@ export default function App() {
               </article>
             ))}
           </section>
+          {filtered.length > 10 && (
+            <div className="candidate-expand">
+              <button
+                className="secondary"
+                onClick={() => setShowMoreCandidates((current) => !current)}
+              >
+                {showMoreCandidates
+                  ? "추가 후보 접기"
+                  : `추가 후보 ${filtered.length - 10}개 펼쳐보기`}
+              </button>
+            </div>
+          )}
         </main>
       )}
 

@@ -116,6 +116,19 @@ def find_text(node: ET.Element, names: set[str]) -> str:
     return ""
 
 
+def find_content_text(node: ET.Element) -> str:
+    """Prefer useful RSS/Atom content fields and skip empty fields."""
+    descendants = list(node.iter())
+    for name in ("encoded", "content", "description", "summary"):
+        for child in descendants:
+            if child is node or local_name(child.tag) != name:
+                continue
+            raw = "".join(child.itertext()).strip()
+            if raw:
+                return safe_text(raw, 3000)
+    return ""
+
+
 def parse_feed(xml: bytes, source: dict) -> list[dict]:
     head = xml[:20000].upper()
     if b"<!DOCTYPE" in head or b"<!ENTITY" in head:
@@ -137,7 +150,7 @@ def parse_feed(xml: bytes, source: dict) -> list[dict]:
                     link = urljoin(source.get("url", ""), candidate_link)
                     break
         published = find_text(item, {"pubdate", "published", "updated", "date", "issued", "modified"})
-        description = find_text(item, {"description", "summary", "content", "encoded"})
+        description = find_content_text(item)
         if not title or not link:
             continue
         try:

@@ -324,5 +324,32 @@ class SignalDeskSecurityTests(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["source_count"], 2)
 
+    def test_prefers_nonempty_full_feed_content(self):
+        import agent
+
+        xml = """<?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+          <channel>
+            <item>
+              <title>테스트 기사 제목입니다</title>
+              <link>https://example.com/article</link>
+              <description></description>
+              <content:encoded><![CDATA[<p>수집할 수 있는 기사 본문 내용입니다.</p>]]></content:encoded>
+            </item>
+          </channel>
+        </rss>""".encode("utf-8")
+
+        source = {
+            "name": "테스트 피드",
+            "url": "https://example.com/rss",
+            "tier": "professional",
+            "category": "IT·플랫폼",
+        }
+
+        result = agent.parse_feed(xml, source)
+        self.assertEqual(len(result), 1)
+        self.assertIn("기사 본문 내용", result[0]["summary"])
+        self.assertNotIn("<p>", result[0]["summary"])
+
 if __name__ == "__main__":
     unittest.main()
