@@ -106,6 +106,9 @@ jobs:
         run: |
           npm run tauri build -- --ci
 
+      - name: Verify app does not open a console
+        run: python scripts/check-windows-subsystem.py src-tauri/target/release/signal-desk.exe
+
       - name: Attest NSIS artifacts
         uses: actions/attest@v4
         with:

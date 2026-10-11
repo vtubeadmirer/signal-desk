@@ -696,18 +696,23 @@ def _provider_env() -> dict[str, str]:
     return env
 
 
+def _provider_creation_flags() -> int:
+    """Keep background CLI processes hidden without disabling their IPC pipes."""
+    return subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
 def provider_status() -> dict:
     env = _provider_env()
     try:
         version = subprocess.run(
             ["codex", "--version"], capture_output=True, text=True, timeout=8,
-            shell=False, check=False, env=env
+            shell=False, check=False, env=env, creationflags=_provider_creation_flags()
         )
         if version.returncode != 0:
             return {"name": "codex", "installed": True, "authenticated": False, "version": version.stdout.strip(), "auth_hint": "codex login을 완료하세요."}
         auth = subprocess.run(
             ["codex", "login", "status"], capture_output=True, text=True, timeout=12,
-            shell=False, check=False, env=env
+            shell=False, check=False, env=env, creationflags=_provider_creation_flags()
         )
         return {
             "name": "codex",
@@ -767,6 +772,7 @@ def ai_analyze(candidates: list[dict]) -> list[dict]:
             shell=False,
             env=env,
             check=False,
+            creationflags=_provider_creation_flags(),
         )
         if result.returncode != 0:
             raise RuntimeError("AI 분석이 실패했습니다. 자세한 인증정보나 provider 비밀값은 로그로 남기지 않습니다.")
