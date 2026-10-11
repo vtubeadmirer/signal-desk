@@ -21,6 +21,7 @@ from urllib.parse import urljoin, urlparse
 import xml.etree.ElementTree as ET
 
 from community import community_site, parse_community, robots_allowed
+from negative_preferences import negative_penalty, validate_rules
 from rejections import is_rejected
 from editorial import emergency_scope, excluded_topic
 from security import MAX_FEED_BYTES, MAX_INPUT_BYTES, resolve_public_url, safe_text, validate_https_resource_url, validate_public_url
@@ -537,7 +538,7 @@ def is_low_value_news(item: dict) -> bool:
     return False
 
 
-def build_candidates(items: list[dict], personalization: dict | None = None, excluded_hashes: set[str] | None = None) -> list[dict]:
+def build_candidates(items: list[dict], personalization: dict | None = None, excluded_hashes: set[str] | None = None, negative_rules: list[dict] | None = None, negative_stats: dict | None = None) -> list[dict]:
     now = datetime.now(timezone.utc)
     items = [item for item in items
              if not is_rejected(item, excluded_hashes or set())
@@ -546,6 +547,11 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
              and emergency_scope(item) != "foreign_or_unknown"
              and (published := parse_date(item.get("published_at"))) is not None
              and timedelta(minutes=-5) <= now - published <= timedelta(hours=48)]
+    negative_rules = negative_rules or []
+    assessed = [(item, negative_penalty(item, negative_rules)[0]) for item in items]
+    if negative_stats is not None:
+        negative_stats.update(suppressed=sum(penalty >= 40 for _, penalty in assessed), demoted=0)
+    items = [item for item, penalty in assessed if penalty < 40]
     groups: list[list[dict]] = []
     for item in items:
         dt = parse_date(item.get("published_at")) or now
@@ -617,6 +623,14 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
         else:
             score = min(100, base_score + personal_bonus)
 
+        score_before_negative = score
+        dislike_penalty, dislike_matches = negative_penalty(primary, negative_rules)
+        score = max(0, score - dislike_penalty)
+        if dislike_penalty and score == 0:
+            if negative_stats is not None:
+                negative_stats["suppressed"] += 1
+            continue
+
         text = f"{primary.get('title','')} {primary.get('summary','')}"
         talkability = (
             0 if political_rule == "political"
@@ -636,6 +650,10 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
             "usage_status": primary.get("usage_status", "review_required"),
             "score": score,
             "score_raw": 0 if political_rule == "political" else raw,
+            "score_before_negative": score_before_negative,
+            "negative_penalty": dislike_penalty,
+            "negative_matches": dislike_matches,
+            "domestic_emergency": political_rule == "emergency",
             "personalization_bonus": personal_bonus,
             "political_penalty": political_rule == "political",
             "talkability": talkability,
@@ -657,6 +675,8 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
     for i, item in enumerate(output, start=1):
         item["priority"] = i
         item["slide_order"] = i
+    if negative_stats is not None:
+        negative_stats["demoted"] = sum(item["negative_penalty"] > 0 for item in output[:20])
     return output[:20]
 
 
@@ -771,6 +791,10 @@ def handle(request: dict) -> dict:
         stream = request.get("stream", "news")
         if not isinstance(stream, str) or stream not in {"news", "community"}:
             return {"ok": False, "op": op, "error": "지원하지 않는 수집 목록입니다."}
+        try:
+            negative_rules = validate_rules(request.get("negative_rules", []), stream)
+        except ValueError as exc:
+            return {"ok": False, "op": op, "error": str(exc)}
         excluded_hashes = request.get("excluded_hashes", [])
         if not isinstance(excluded_hashes, list) or len(excluded_hashes) > 2000 or not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) for value in excluded_hashes):
             return {"ok": False, "op": op, "error": "제외 목록 형식이 올바르지 않습니다."}
@@ -793,10 +817,11 @@ def handle(request: dict) -> dict:
         personalization = request.get("personalization", {})
         if not isinstance(personalization, dict):
             personalization = {}
-        candidates = build_candidates(items, personalization, set(excluded_hashes))
+        negative_stats: dict[str, int] = {}
+        candidates = build_candidates(items, personalization, set(excluded_hashes), negative_rules, negative_stats)
         for candidate in candidates:
             candidate["event_id"] = f"{stream}-{candidate['event_id']}"
-        return {"ok": True, "op": op, "stream": stream, "candidates": candidates, "message": f"수집 {len(items)}건 → 후보 {len(candidates)}건", "errors": errors}
+        return {"ok": True, "op": op, "stream": stream, "negative_stats": negative_stats, "candidates": candidates, "message": f"수집 {len(items)}건 → 후보 {len(candidates)}건", "errors": errors}
     if op == "analyze":
         candidates = request.get("candidates", [])
         if not isinstance(candidates, list) or len(candidates) > 15:

@@ -19,6 +19,10 @@ export type Candidate = {
   usage_status: "official_feed" | "review_required" | "permission_required" | "blocked";
   score: number;
   score_raw: number;
+  score_before_negative?: number;
+  negative_penalty?: number;
+  negative_matches?: string[];
+  domestic_emergency?: boolean;
   personalization_bonus?: number;
   political_penalty?: boolean;
   talkability: number;
@@ -43,6 +47,7 @@ export type Candidate = {
 
 export type AgentResponse = {
   stream?: "news" | "community";
+  negative_stats?: { suppressed: number; demoted: number };
   errors?: string[];
   ok: boolean;
   op: string;

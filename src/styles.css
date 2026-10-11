@@ -221,3 +221,10 @@
 .excluded-row {display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 0;border-bottom:1px solid #323a45;}
 .excluded-row h2 {font-size:15px;line-height:1.6;}
 .excluded-row p {font-size:12px;color:#9aa4b2;}
+
+.learning-panel {margin:20px 0;padding:18px;border:1px solid #39414c;border-radius:12px;background:#171c25;}
+.learning-panel select {display:block;max-width:100%;margin-top:12px;padding:10px;background:#0f141a;color:#e2e8f0;border:1px solid #39414c;border-radius:8px;}
+.learning-panel label,.learning-rule {display:flex;align-items:center;gap:10px;}
+.learning-panel p {font-size:12px;line-height:1.8;color:#9aa4b2;}
+.learning-rule {padding:12px 0;border-bottom:1px solid #323a45;}
+.learning-rule small {display:block;margin-top:5px;color:#9aa4b2;font-size:11px;}

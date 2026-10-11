@@ -38,11 +38,14 @@ jobs:
         run: npm run build
 
       - name: Sidecar IPC regression tests
-        run: node --test tests/agent.test.cjs tests/backup.test.cjs tests/streams.test.cjs tests/rejections.test.cjs
+        run: node --test tests/agent.test.cjs tests/backup.test.cjs tests/streams.test.cjs tests/rejections.test.cjs tests/negative-preferences.test.cjs
 
       - name: Build Python sidecar
         shell: pwsh
         run: ./scripts/build-sidecar.ps1
+
+      - name: Packaged sidecar smoke test
+        run: python scripts/check-sidecar.py src-tauri/binaries/signal-desk-agent-x86_64-pc-windows-msvc.exe
 
       - name: Generate Tauri updater placeholder notice
         shell: pwsh

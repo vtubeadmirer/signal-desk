@@ -49,3 +49,16 @@ test('invalid rejected-item backup does not reach restore',()=>{
  original.rejectedItems=[{id:'javascript:alert(1)',url:'javascript:alert(1)',title:'invalid',source_name:'Example',stream:'community',rejectedAt:'2026-10-12T00:00:00Z'}];
  assert.throws(()=>api.parseBackup(JSON.stringify(original)));
 });
+
+test('backup preserves learning switches and muted rule IDs',()=>{
+ const original=data();original.rejectionLearning={enabled:true,mode:'strict',mutedRuleIds:['news:pair:제조업|현장']};
+ const restored=api.parseBackup(api.serializeBackup(original));
+ assert.deepEqual(restored.rejectionLearning,original.rejectionLearning);
+ original.rejectionLearning.mode='invalid';
+ assert.throws(()=>api.serializeBackup(original));
+});
+
+test('invalid learned-score metadata is rejected on import',()=>{
+ const original=data();original.articles[0].candidate.negative_penalty='80';
+ assert.throws(()=>api.serializeBackup(original));
+});

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { addRejections, exclusionHashes, isRejected, rejectionId, rejectionIndex, rejectionValid, normalizedTitle, MAX_REJECTIONS, type RejectedItem } from "./rejections";
+import { learnNegativeRules, activeNegativeRules, applyNegativeRules, negativePenalty, preferenceTokens, type NegativeRule } from "./negativePreferences";
+import { DEFAULT_LEARNING, learningValid, type LearningSettings, addRejections, exclusionHashes, isRejected, rejectionId, rejectionIndex, rejectionValid, normalizedTitle, MAX_REJECTIONS, type RejectedItem } from "./rejections";
 import { candidateStream, sourceStream, streamCandidates, replaceStream, type SignalStream, type SavedStream } from "./streams";
 import { parseBackup, serializeBackup, writeStorageAtomically, sourceValid, type DeskBackup } from "./backup";
 import { readBackupFile, saveBackupFile } from "./backupFiles";
@@ -11,12 +12,20 @@ import type { ArticleRecord, Candidate, PersonalizationProfile, Source } from ".
 const STORAGE_KEY = "signal-desk:sources:v1";
 const PROVIDER_KEY = "signal-desk:provider:v1";
 const ARTICLES_KEY = "signal-desk:articles:v1";
+const LEARNING_KEY = "signal-desk:rejection-learning:v1";
 const REJECTIONS_KEY = "signal-desk:rejections:v1";
 const DATE_KEY = "signal-desk:broadcast-date:v1";
 const COMMUNITY_MIGRATION_KEY = "signal-desk:community-sources:v1";
 
 function articleId(url: string): string {
   return url.trim().split("#", 1)[0].replace(/\/+$/, "");
+}
+
+function loadLearning(): LearningSettings {
+  try {
+    const data: unknown = JSON.parse(localStorage.getItem(LEARNING_KEY) ?? "null");
+    return learningValid(data) ? data : DEFAULT_LEARNING;
+  } catch { return DEFAULT_LEARNING; }
 }
 
 function loadRejections(): RejectedItem[] {
@@ -173,6 +182,12 @@ export default function App() {
   const [savedArticles, setSavedArticles] = useState<ArticleRecord[]>(loadSavedArticles);
   const [rejectedItems, setRejectedItems] = useState<RejectedItem[]>(loadRejections);
   const rejectedIndex = useMemo(() => rejectionIndex(rejectedItems), [rejectedItems]);
+  const [learning, setLearning] = useState<LearningSettings>(loadLearning);
+  const [learningQuery, setLearningQuery] = useState("");
+  const [learningStream, setLearningStream] = useState<SavedStream>("all");
+  const learnedRules = useMemo(() => learnNegativeRules(rejectedItems, learning.mode), [rejectedItems, learning.mode]);
+  const activeRules = useMemo(() => activeNegativeRules(learnedRules, learning), [learnedRules, learning]);
+  const learnedCandidates = useMemo(() => applyNegativeRules(candidates, activeRules), [candidates, activeRules]);
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [excludedQuery, setExcludedQuery] = useState("");
   const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(() => localStorage.getItem(DATE_KEY) || localDateKey());
@@ -254,11 +269,11 @@ export default function App() {
   }
 
   const filtered = useMemo(() => {
-    return streamCandidates(candidates.filter((item) => !isRejected(item, rejectedIndex)), stream, filter);
-  }, [candidates, stream, filter, rejectedIndex]);
+    return streamCandidates(learnedCandidates.filter((item) => !isRejected(item, rejectedIndex)), stream, filter);
+  }, [learnedCandidates, stream, filter, rejectedIndex]);
 
   const visibleCandidates = showMoreCandidates ? filtered : filtered.slice(0, 10);
-  const checkedCandidates = candidates.filter((item) => candidateStream(item) === stream && !isRejected(item, rejectedIndex) && checkedIds.includes(rejectionId(item.url)));
+  const checkedCandidates = learnedCandidates.filter((item) => candidateStream(item) === stream && !isRejected(item, rejectedIndex) && checkedIds.includes(rejectionId(item.url)));
   const allVisibleChecked = visibleCandidates.length > 0 && visibleCandidates.every((item) => checkedIds.includes(rejectionId(item.url)));
 
   function toggleChecked(id: string) {
@@ -268,6 +283,22 @@ export default function App() {
   function toggleVisibleChecked() {
     const ids = visibleCandidates.map((item) => rejectionId(item.url));
     setCheckedIds((current) => allVisibleChecked ? current.filter((id) => !ids.includes(id)) : [...new Set([...current, ...ids])]);
+  }
+
+  function persistLearning(settings: LearningSettings) {
+    try {
+      localStorage.setItem(LEARNING_KEY, JSON.stringify(settings));
+      setLearning(settings);
+      setCheckedIds([]);
+      setStatus("제외 성향 설정을 저장했습니다. 다음 수집부터 해당 성향으로 후보를 선별합니다.");
+    } catch { setStatus("제외 성향 설정을 저장하지 못했습니다. 기존 설정을 유지합니다."); }
+  }
+
+  function toggleRule(rule: NegativeRule) {
+    const muted = learning.mutedRuleIds.includes(rule.id);
+    const next = muted ? learning.mutedRuleIds.filter((id) => id !== rule.id) : [...learning.mutedRuleIds, rule.id];
+    if (next.length > 1000) { setStatus("비활성 규칙은 최대 1,000개입니다."); return; }
+    persistLearning({ ...learning, mutedRuleIds: next });
   }
 
   function persistRejections(items: RejectedItem[]) {
@@ -281,9 +312,10 @@ export default function App() {
       const next = addRejections(rejectedItems, items.map((item) => ({ id: rejectionId(item.url), url: item.url, title: item.title, source_name: item.source_name, stream: candidateStream(item), rejectedAt: new Date().toISOString() })));
       persistRejections(next);
       const index = rejectionIndex(next);
-      const hiddenIds = new Set(candidates.filter((item) => isRejected(item, index)).map((item) => rejectionId(item.url)));
-      setCheckedIds((current) => current.filter((id) => !hiddenIds.has(id)));
-      setStatus(`${items.length}개를 후보에서 제외했습니다. 같은 URL이나 동일한 제목은 다시 추천하지 않습니다.`);
+      const nextRules = activeNegativeRules(learnNegativeRules(next, learning.mode), learning);
+      const remainingIds = new Set(applyNegativeRules(candidates, nextRules).filter((item) => !isRejected(item, index)).map((item) => rejectionId(item.url)));
+      setCheckedIds((current) => current.filter((id) => remainingIds.has(id)));
+      setStatus(`${items.length}개를 후보에서 제외했습니다. 같은 글은 다시 추천하지 않고, 비슷한 새 글에는 제외 성향을 반영합니다.`);
     } catch (error) { setStatus(error instanceof Error ? error.message : "제외 목록을 저장하지 못했습니다."); }
   }
 
@@ -296,7 +328,7 @@ export default function App() {
   }
 
   const personalization = useMemo<PersonalizationProfile>(() => {
-    const chosen = savedArticles.filter((record) => candidateStream(record.candidate) === stream && !isRejected(record.candidate, rejectedIndex)).filter((record) =>
+    const chosen = savedArticles.filter((record) => candidateStream(record.candidate) === stream && !isRejected(record.candidate, rejectedIndex) && negativePenalty(record.candidate, activeRules).penalty < 40).filter((record) =>
       record.interested || record.broadcastDates.length > 0 || record.labels.length > 0
     );
     const keywords = new Set<string>();
@@ -320,7 +352,7 @@ export default function App() {
       categories: Array.from(categories).slice(0, 30),
       labels: Array.from(labels).slice(0, 50),
     };
-  }, [savedArticles, stream, rejectedIndex]);
+  }, [savedArticles, stream, rejectedIndex, activeRules]);
 
   const archiveRecords = useMemo(() => {
     const query = archiveQuery.trim().toLocaleLowerCase();
@@ -428,7 +460,7 @@ export default function App() {
     setRunning(true);
     setStatus(`${streamLabel} 수집 및 후보 선별 중…`);
     try {
-      const r = await collect(activeSources, personalization, stream, await exclusionHashes(rejectedItems));
+      const r = await collect(activeSources, personalization, stream, await exclusionHashes(rejectedItems), activeRules.filter((rule) => rule.stream === stream));
       if (!r.ok) throw new Error(r.error ?? "수집 실패");
       const freshCandidates = r.candidates ?? [];
       setCandidates((current) => replaceStream(current, freshCandidates, stream));
@@ -445,7 +477,7 @@ export default function App() {
       });
       setShowMoreCandidates(false);
       setLastRun(new Date().toLocaleString("ko-KR"));
-      setStatus(`${streamLabel} 후보 ${r.candidates?.length ?? 0}개를 만들었습니다.${r.errors?.length ? ` 수집 실패: ${r.errors.join(" / ")}` : ""}`);
+      setStatus(`${streamLabel} 후보 ${r.candidates?.length ?? 0}개를 만들었습니다.${r.negative_stats ? ` 제외 성향으로 ${r.negative_stats.suppressed}건 제외 · ${r.negative_stats.demoted}건 감점.` : ""}${r.errors?.length ? ` 수집 실패: ${r.errors.join(" / ")}` : ""}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "수집 중 오류가 발생했습니다.");
     } finally {
@@ -494,7 +526,7 @@ export default function App() {
   }
 
   function backupData() {
-    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate, rejectedItems };
+    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate, rejectedItems, rejectionLearning: learning };
   }
 
   async function exportBackup() {
@@ -526,10 +558,12 @@ export default function App() {
         [PROVIDER_KEY]: pendingBackup.provider,
         [DATE_KEY]: pendingBackup.selectedBroadcastDate,
         [REJECTIONS_KEY]: JSON.stringify(pendingBackup.rejectedItems ?? []),
+        [LEARNING_KEY]: JSON.stringify(pendingBackup.rejectionLearning ?? DEFAULT_LEARNING),
         [COMMUNITY_MIGRATION_KEY]: "1",
       });
       setSavedArticles(pendingBackup.articles);
       setRejectedItems(pendingBackup.rejectedItems ?? []);
+      setLearning(pendingBackup.rejectionLearning ?? DEFAULT_LEARNING);
       setCheckedIds([]);
       setSources(pendingBackup.sources);
       setProvider(pendingBackup.provider);
@@ -562,7 +596,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <div className="brand">SIGNAL DESK <small>v0.2.2</small></div>
+          <div className="brand">SIGNAL DESK <small>v0.3.0</small></div>
           <div className="subtitle">오늘 방송에서 이야기할 만한 신호만 압축합니다.</div>
         </div>
         <div className="top-actions">
@@ -653,6 +687,7 @@ export default function App() {
                 </details>
                 <div className="metrics">
                   <span>점수 {item.score}</span>
+                  {item.negative_penalty ? <span title={item.negative_matches?.join(" / ")}>제외 성향 −{item.negative_penalty}</span> : null}
                   <span>대화성 {item.talkability}</span>
                   <span>검증비용 {item.verification_cost}</span>
                   <span>출처 {item.source_count}</span>
@@ -914,14 +949,34 @@ export default function App() {
         <main className="content narrow">
           <section className="panel">
             <h1>제외 목록 ({rejectedItems.length})</h1>
+            <section className="learning-panel">
+              <h2>제외 성향 학습</h2>
+              <label><input type="checkbox" checked={learning.enabled} disabled={running} onChange={(event) => persistLearning({ ...learning, enabled: event.target.checked })} /> 비슷한 새 글에 감점·제외 적용</label>
+              <select aria-label="제외 학습 강도" value={learning.mode} disabled={running} onChange={(event) => persistLearning({ ...learning, mode: event.target.value as LearningSettings["mode"] })}>
+                <option value="balanced">기본: 주제 또는 핵심 단어 조합이 맞을 때 제외</option>
+                <option value="strict">강하게: 구체적인 핵심 단어 하나가 맞아도 제외</option>
+              </select>
+              <p>지금까지 제외한 제목에서 학습한 규칙 {learnedRules.length}개 · 활성 {activeRules.length}개. 같은 주제를 반복해서 제외할수록 감점이 커집니다. 강하게 일치하면 후보에 넣지 않고, 일부 단어만 겹치면 점수를 낮춥니다.</p>
+              <p>일반 뉴스와 커뮤니티 성향은 따로 학습합니다. 대한민국 국가적 비상사태 예외는 추정한 성향으로 숨기지 않으며, 직접 제외한 글은 항상 숨깁니다.</p>
+              <details>
+                <summary>학습한 주제·핵심 단어 확인 및 수정</summary>
+                <input className="archive-search" aria-label="학습 규칙 검색" placeholder="주제·핵심 단어 검색" value={learningQuery} onChange={(event) => setLearningQuery(event.target.value)} />
+                <div className="filters">{(["all", "news", "community"] as const).map((value) => <button key={value} className={learningStream === value ? "filter active" : "filter"} onClick={() => setLearningStream(value)}>{value === "all" ? "전체" : value === "news" ? "일반 뉴스" : "커뮤니티·밈"}</button>)}</div>
+                {learnedRules.filter((rule) => (learningStream === "all" || rule.stream === learningStream) && rule.label.toLowerCase().includes(learningQuery.toLowerCase())).slice(0, 50).map((rule) => <label className="learning-rule" key={rule.id}>
+                  <input type="checkbox" checked={!learning.mutedRuleIds.includes(rule.id)} disabled={running || !learning.enabled} onChange={() => toggleRule(rule)} />
+                  <span><strong>{rule.label}</strong><small>{rule.stream === "news" ? "일반 뉴스" : "커뮤니티·밈"} · 제외 이력 {rule.count}회 · 최대 −{rule.weight}점</small></span>
+                </label>)}
+                <p>검색 결과의 우선순위 50개를 표시합니다. 체크를 해제하면 해당 성향만 적용하지 않습니다. 제목에서 구체적인 주제나 단어 조합을 찾지 못하면 개별 글 제외만 적용됩니다.</p>
+              </details>
+            </section>
             <p>같은 URL과 동일한 제목의 재게시글을 추천 후보에서 숨깁니다. 보관함에 저장한 메모와 방송 준비 자료는 삭제하지 않습니다. 다시 허용은 직접 제외한 기록을 해제하며, 기본 선별 규칙은 계속 적용됩니다.</p>
             <input className="archive-search" aria-label="제외 목록 검색" value={excludedQuery} placeholder="제목·출처 검색" onChange={(event) => setExcludedQuery(event.target.value)} />
             {rejectedItems.filter((item) => `${item.title} ${item.source_name}`.toLowerCase().includes(excludedQuery.toLowerCase())).slice().reverse().slice(0, 100).map((item) => <article className="excluded-row" key={item.id}>
-              <div><span className="badge">{item.stream === "news" ? "일반 뉴스" : "커뮤니티·밈"}</span><h2>{item.title}</h2><p>{item.source_name} · {new Date(item.rejectedAt).toLocaleDateString("ko-KR")}</p></div>
+              <div><span className="badge">{item.stream === "news" ? "일반 뉴스" : "커뮤니티·밈"}</span><h2>{item.title}</h2><p>{item.source_name} · {new Date(item.rejectedAt).toLocaleDateString("ko-KR")}</p><p>핵심 단어: {preferenceTokens(item.title).join(", ") || "구체적인 단어 없음"}</p></div>
               <button className="secondary" disabled={running} onClick={() => allowRejected(item)}>다시 허용</button>
             </article>)}
             {!rejectedItems.length && <p>아직 제외한 후보가 없습니다.</p>}
-            <p>검색 결과의 최근 100개를 표시합니다. 다시 허용하면 동일한 제목의 제외 항목도 함께 해제됩니다.</p>
+            <p>검색 결과의 최근 100개를 표시합니다. 다시 허용하면 동일한 제목의 제외 항목도 함께 해제됩니다. 다른 제외 글에서 학습한 성향은 남을 수 있으므로 위의 학습 규칙도 확인하세요.</p>
           </section>
         </main>
       )}
@@ -930,7 +985,7 @@ export default function App() {
         <main className="content narrow">
           <section className="panel">
             <h1>백업·복원</h1>
-            <p>보관함의 기사·AI 분석·관심 표시·라벨·메모·방송 날짜와 수집 소스·제외 목록을 JSON 파일 하나로 옮깁니다. 다른 PC에도 같은 앱 버전에서 그대로 복원할 수 있습니다.</p>
+            <p>보관함의 기사·AI 분석·관심 표시·라벨·메모·방송 날짜와 수집 소스·제외 목록·학습 설정을 JSON 파일 하나로 옮깁니다. 다른 PC에도 같은 앱 버전에서 그대로 복원할 수 있습니다.</p>
             <p>현재 보관함 {savedArticles.length}개 · 수집 소스 {sources.length}개. AI 인증정보는 백업에 포함되지 않습니다.</p>
             <div className="saved-card-actions">
               <button className="primary" disabled={backupBusy || running} onClick={() => void exportBackup()}>백업 내보내기</button>
