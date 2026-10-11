@@ -32,3 +32,5 @@ src-tauri/gen/
 
 # Local news source configuration
 config.sources.json
+.npm-cache/
+build/
