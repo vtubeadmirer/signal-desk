@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { addRejections, exclusionHashes, isRejected, rejectionId, rejectionIndex, rejectionValid, normalizedTitle, MAX_REJECTIONS, type RejectedItem } from "./rejections";
 import { candidateStream, sourceStream, streamCandidates, replaceStream, type SignalStream, type SavedStream } from "./streams";
 import { parseBackup, serializeBackup, writeStorageAtomically, sourceValid, type DeskBackup } from "./backup";
 import { readBackupFile, saveBackupFile } from "./backupFiles";
@@ -10,11 +11,19 @@ import type { ArticleRecord, Candidate, PersonalizationProfile, Source } from ".
 const STORAGE_KEY = "signal-desk:sources:v1";
 const PROVIDER_KEY = "signal-desk:provider:v1";
 const ARTICLES_KEY = "signal-desk:articles:v1";
+const REJECTIONS_KEY = "signal-desk:rejections:v1";
 const DATE_KEY = "signal-desk:broadcast-date:v1";
 const COMMUNITY_MIGRATION_KEY = "signal-desk:community-sources:v1";
 
 function articleId(url: string): string {
   return url.trim().split("#", 1)[0].replace(/\/+$/, "");
+}
+
+function loadRejections(): RejectedItem[] {
+  try {
+    const data: unknown = JSON.parse(localStorage.getItem(REJECTIONS_KEY) ?? "[]");
+    return Array.isArray(data) && data.length <= MAX_REJECTIONS && data.every(rejectionValid) ? data : [];
+  } catch { return []; }
 }
 
 function localDateKey(): string {
@@ -155,13 +164,17 @@ function summaryPreview(value?: string | null): string {
 
 export default function App() {
   const [tab, setTab] = useState<"today" | "community" | "prep" | "archive" | "settings">("today");
-  const [settingsSection, setSettingsSection] = useState<"sources" | "rules" | "security" | "backup">("sources");
+  const [settingsSection, setSettingsSection] = useState<"sources" | "rules" | "security" | "backup" | "excluded">("sources");
   const [sources, setSources] = useState<Source[]>(loadSources);
   const [provider, setProvider] = useState(localStorage.getItem(PROVIDER_KEY) ?? "codex");
   const [status, setStatus] = useState("준비됨");
   const [providerStatus, setProviderStatus] = useState<{ installed: boolean; authenticated?: boolean; version?: string; auth_hint?: string } | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [savedArticles, setSavedArticles] = useState<ArticleRecord[]>(loadSavedArticles);
+  const [rejectedItems, setRejectedItems] = useState<RejectedItem[]>(loadRejections);
+  const rejectedIndex = useMemo(() => rejectionIndex(rejectedItems), [rejectedItems]);
+  const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const [excludedQuery, setExcludedQuery] = useState("");
   const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(() => localStorage.getItem(DATE_KEY) || localDateKey());
   const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
   const [archiveQuery, setArchiveQuery] = useState("");
@@ -241,13 +254,49 @@ export default function App() {
   }
 
   const filtered = useMemo(() => {
-    return streamCandidates(candidates, stream, filter);
-  }, [candidates, stream, filter]);
+    return streamCandidates(candidates.filter((item) => !isRejected(item, rejectedIndex)), stream, filter);
+  }, [candidates, stream, filter, rejectedIndex]);
 
   const visibleCandidates = showMoreCandidates ? filtered : filtered.slice(0, 10);
+  const checkedCandidates = candidates.filter((item) => candidateStream(item) === stream && !isRejected(item, rejectedIndex) && checkedIds.includes(rejectionId(item.url)));
+  const allVisibleChecked = visibleCandidates.length > 0 && visibleCandidates.every((item) => checkedIds.includes(rejectionId(item.url)));
+
+  function toggleChecked(id: string) {
+    setCheckedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  }
+
+  function toggleVisibleChecked() {
+    const ids = visibleCandidates.map((item) => rejectionId(item.url));
+    setCheckedIds((current) => allVisibleChecked ? current.filter((id) => !ids.includes(id)) : [...new Set([...current, ...ids])]);
+  }
+
+  function persistRejections(items: RejectedItem[]) {
+    localStorage.setItem(REJECTIONS_KEY, JSON.stringify(items));
+    setRejectedItems(items);
+  }
+
+  function rejectCandidates(items: Candidate[]) {
+    if (!items.length) return;
+    try {
+      const next = addRejections(rejectedItems, items.map((item) => ({ id: rejectionId(item.url), url: item.url, title: item.title, source_name: item.source_name, stream: candidateStream(item), rejectedAt: new Date().toISOString() })));
+      persistRejections(next);
+      const index = rejectionIndex(next);
+      const hiddenIds = new Set(candidates.filter((item) => isRejected(item, index)).map((item) => rejectionId(item.url)));
+      setCheckedIds((current) => current.filter((id) => !hiddenIds.has(id)));
+      setStatus(`${items.length}개를 후보에서 제외했습니다. 같은 URL이나 동일한 제목은 다시 추천하지 않습니다.`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : "제외 목록을 저장하지 못했습니다."); }
+  }
+
+  function allowRejected(item: RejectedItem) {
+    try {
+      const title = normalizedTitle(item.title);
+      persistRejections(rejectedItems.filter((record) => record.id !== item.id && !([...title].length >= 8 && normalizedTitle(record.title) === title)));
+      setStatus("제외를 해제했습니다. 현재 후보에 남아 있으면 바로 표시되고, 그 외에는 다음 수집부터 다시 후보가 될 수 있습니다.");
+    } catch { setStatus("제외 목록을 저장하지 못했습니다. 기존 제외 상태는 유지됩니다."); }
+  }
 
   const personalization = useMemo<PersonalizationProfile>(() => {
-    const chosen = savedArticles.filter((record) => candidateStream(record.candidate) === stream).filter((record) =>
+    const chosen = savedArticles.filter((record) => candidateStream(record.candidate) === stream && !isRejected(record.candidate, rejectedIndex)).filter((record) =>
       record.interested || record.broadcastDates.length > 0 || record.labels.length > 0
     );
     const keywords = new Set<string>();
@@ -271,7 +320,7 @@ export default function App() {
       categories: Array.from(categories).slice(0, 30),
       labels: Array.from(labels).slice(0, 50),
     };
-  }, [savedArticles, stream]);
+  }, [savedArticles, stream, rejectedIndex]);
 
   const archiveRecords = useMemo(() => {
     const query = archiveQuery.trim().toLocaleLowerCase();
@@ -379,10 +428,12 @@ export default function App() {
     setRunning(true);
     setStatus(`${streamLabel} 수집 및 후보 선별 중…`);
     try {
-      const r = await collect(activeSources, personalization, stream);
+      const r = await collect(activeSources, personalization, stream, await exclusionHashes(rejectedItems));
       if (!r.ok) throw new Error(r.error ?? "수집 실패");
       const freshCandidates = r.candidates ?? [];
       setCandidates((current) => replaceStream(current, freshCandidates, stream));
+      const previousIds = candidates.filter((item) => candidateStream(item) === stream).map((item) => rejectionId(item.url));
+      setCheckedIds((current) => current.filter((id) => !previousIds.includes(id)));
       setSavedArticles((current) => {
         const freshById = new Map(freshCandidates.map((item) => [articleId(item.url), item]));
         return current.map((record) => {
@@ -443,7 +494,7 @@ export default function App() {
   }
 
   function backupData() {
-    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate };
+    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate, rejectedItems };
   }
 
   async function exportBackup() {
@@ -474,9 +525,12 @@ export default function App() {
         [STORAGE_KEY]: JSON.stringify(pendingBackup.sources),
         [PROVIDER_KEY]: pendingBackup.provider,
         [DATE_KEY]: pendingBackup.selectedBroadcastDate,
+        [REJECTIONS_KEY]: JSON.stringify(pendingBackup.rejectedItems ?? []),
         [COMMUNITY_MIGRATION_KEY]: "1",
       });
       setSavedArticles(pendingBackup.articles);
+      setRejectedItems(pendingBackup.rejectedItems ?? []);
+      setCheckedIds([]);
       setSources(pendingBackup.sources);
       setProvider(pendingBackup.provider);
       setSelectedBroadcastDate(pendingBackup.selectedBroadcastDate);
@@ -508,7 +562,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <div className="brand">SIGNAL DESK <small>v0.2.1</small></div>
+          <div className="brand">SIGNAL DESK <small>v0.2.2</small></div>
           <div className="subtitle">오늘 방송에서 이야기할 만한 신호만 압축합니다.</div>
         </div>
         <div className="top-actions">
@@ -568,6 +622,12 @@ export default function App() {
             <div className="run-info">{lastRun ? `마지막 실행 ${lastRun}` : status}</div>
           </section>
 
+          <section className="rejection-toolbar" aria-label="후보 제외">
+            <label><input type="checkbox" checked={allVisibleChecked} disabled={running || visibleCandidates.length === 0} onChange={toggleVisibleChecked} /> 보이는 후보 모두 선택</label>
+            <button className="danger" disabled={running || checkedCandidates.length === 0} onClick={() => rejectCandidates(checkedCandidates)}>선택 {checkedCandidates.length}개 제외</button>
+            <button className="secondary" onClick={() => { setTab("settings"); setSettingsSection("excluded"); }}>제외 목록 ({rejectedItems.length})</button>
+            <span>제외한 글은 다음 수집과 AI 분석에서도 빠집니다.</span>
+          </section>
           <section className="signals-grid">
             {filtered.length === 0 ? (
               <div className="empty-card">
@@ -576,6 +636,7 @@ export default function App() {
               </div>
             ) : visibleCandidates.map((item) => (
               <article className="signal-card" key={item.event_id}>
+                <label className="candidate-checkbox"><input type="checkbox" aria-label={`${item.title} 제외 대상으로 선택`} checked={checkedIds.includes(rejectionId(item.url))} disabled={running} onChange={() => toggleChecked(rejectionId(item.url))} /> 제외할 후보 선택</label>
                 <div className="signal-meta">
                   <span className="badge">{item.category}</span>
                   {item.source_type === "community" && <span className="badge">커뮤니티 화제 · 원문 확인 필요</span>}
@@ -598,6 +659,7 @@ export default function App() {
                   {item.personalization_bonus ? <span>관심 주제 +{item.personalization_bonus}</span> : null}
                 </div>
                 <div className="article-actions">
+                  <button className="danger" disabled={running} onClick={() => rejectCandidates([item])}>이 글 제외</button>
                   <button
                     className={savedArticles.some((record) => record.id === articleId(item.url) && record.interested) ? "secondary selected" : "secondary"}
                     aria-pressed={savedArticles.some((record) => record.id === articleId(item.url) && record.interested)}
@@ -841,17 +903,34 @@ export default function App() {
           <nav className="settings-subtabs">
             <button className={settingsSection === "sources" ? "active" : ""} onClick={() => setSettingsSection("sources")}>뉴스 소스</button>
             <button className={settingsSection === "rules" ? "active" : ""} onClick={() => setSettingsSection("rules")}>뉴스 선별</button>
+            <button className={settingsSection === "excluded" ? "active" : ""} onClick={() => setSettingsSection("excluded")}>제외 목록</button>
             <button className={settingsSection === "backup" ? "active" : ""} onClick={() => setSettingsSection("backup")}>백업·복원</button>
             <button className={settingsSection === "security" ? "active" : ""} onClick={() => setSettingsSection("security")}>보안</button>
           </nav>
         </div>
       )}
 
+      {tab === "settings" && settingsSection === "excluded" && (
+        <main className="content narrow">
+          <section className="panel">
+            <h1>제외 목록 ({rejectedItems.length})</h1>
+            <p>같은 URL과 동일한 제목의 재게시글을 추천 후보에서 숨깁니다. 보관함에 저장한 메모와 방송 준비 자료는 삭제하지 않습니다. 다시 허용은 직접 제외한 기록을 해제하며, 기본 선별 규칙은 계속 적용됩니다.</p>
+            <input className="archive-search" aria-label="제외 목록 검색" value={excludedQuery} placeholder="제목·출처 검색" onChange={(event) => setExcludedQuery(event.target.value)} />
+            {rejectedItems.filter((item) => `${item.title} ${item.source_name}`.toLowerCase().includes(excludedQuery.toLowerCase())).slice().reverse().slice(0, 100).map((item) => <article className="excluded-row" key={item.id}>
+              <div><span className="badge">{item.stream === "news" ? "일반 뉴스" : "커뮤니티·밈"}</span><h2>{item.title}</h2><p>{item.source_name} · {new Date(item.rejectedAt).toLocaleDateString("ko-KR")}</p></div>
+              <button className="secondary" disabled={running} onClick={() => allowRejected(item)}>다시 허용</button>
+            </article>)}
+            {!rejectedItems.length && <p>아직 제외한 후보가 없습니다.</p>}
+            <p>검색 결과의 최근 100개를 표시합니다. 다시 허용하면 동일한 제목의 제외 항목도 함께 해제됩니다.</p>
+          </section>
+        </main>
+      )}
+
       {tab === "settings" && settingsSection === "backup" && (
         <main className="content narrow">
           <section className="panel">
             <h1>백업·복원</h1>
-            <p>보관함의 기사·AI 분석·관심 표시·라벨·메모·방송 날짜와 수집 소스를 JSON 파일 하나로 옮깁니다. 다른 PC에도 같은 앱 버전에서 그대로 복원할 수 있습니다.</p>
+            <p>보관함의 기사·AI 분석·관심 표시·라벨·메모·방송 날짜와 수집 소스·제외 목록을 JSON 파일 하나로 옮깁니다. 다른 PC에도 같은 앱 버전에서 그대로 복원할 수 있습니다.</p>
             <p>현재 보관함 {savedArticles.length}개 · 수집 소스 {sources.length}개. AI 인증정보는 백업에 포함되지 않습니다.</p>
             <div className="saved-card-actions">
               <button className="primary" disabled={backupBusy || running} onClick={() => void exportBackup()}>백업 내보내기</button>
@@ -861,8 +940,8 @@ export default function App() {
             {pendingBackup && <div className="backup-preview">
               <h2>복원할 백업 확인</h2>
               <p>내보낸 시각: {new Date(pendingBackup.exportedAt).toLocaleString("ko-KR")}</p>
-              <p>기사 {pendingBackup.articles.length}개 · 방송 준비 {pendingBackup.articles.filter((record) => record.broadcastDates.length > 0).length}개 · 소스 {pendingBackup.sources.length}개</p>
-              <p>복원하면 현재 보관함과 소스 설정을 교체합니다. 기존 내용을 보존하려면 먼저 백업 내보내기를 사용하세요.</p>
+              <p>기사 {pendingBackup.articles.length}개 · 방송 준비 {pendingBackup.articles.filter((record) => record.broadcastDates.length > 0).length}개 · 소스 {pendingBackup.sources.length}개 · 제외 {pendingBackup.rejectedItems?.length ?? 0}개</p>
+              <p>복원하면 현재 보관함·소스 설정·제외 목록을 교체합니다. 기존 내용을 보존하려면 먼저 백업 내보내기를 사용하세요.</p>
               <div className="saved-card-actions">
                 <button className="primary" disabled={backupBusy || running} onClick={restoreBackup}>백업 내용으로 복원</button>
                 <button className="secondary" onClick={() => setPendingBackup(null)}>취소</button>

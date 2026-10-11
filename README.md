@@ -108,3 +108,13 @@ npm run build
 ## v0.2.1: independent news and community lists
 
 General news is the default tab; Community/Memes has its own tab. Each collection request fetches only that tab's source type and independently selects up to 20 candidates. Collecting one type preserves the other type's previous results, category filter, expanded state and collection timestamp. Saved interests personalize only the matching type. AI analysis receives up to 15 candidates from the current tab and category. Server-side source filtering and type-prefixed event IDs prevent mixing or AI update collisions. Broadcast Prep and Archive can show all saved items or filter by General News / Community/Memes. Backup format v1 remains compatible.
+
+## v0.2.2: candidate rejection and tighter editorial gates
+
+Each candidate has a selection checkbox and a one-click Reject action. Select multiple candidates and reject them together. Preferences are persisted before hiding cards; a storage failure leaves existing state intact. Settings → Excluded List supports search and restoring entries. Saved notes and broadcast plans are retained. Rejected saved items no longer contribute positive personalization.
+
+Matching uses normalized URL identity and exact normalized titles (at least eight Unicode letters/digits). Exclusions are sent as compact SHA-256 fingerprints and applied before clustering/ranking/top-20 truncation, so later eligible candidates can replace rejected ones on collection. This does not infer that all topics or words in a rejected post are unwanted. Titles rewritten by reposters may require another rejection.
+
+Backup format v1 includes an optional rejectedItems field; old v1 backups without it remain valid. Restore preview displays the exclusion count. Preferences are bounded to 1,000 entries and can be managed in Settings.
+
+Editorial gates now cover assassination, foreign missile/strike/death reports and explicit ethnic/gender slurs. The exception for explicitly domestic national emergencies remains for crisis-related strike/death keywords; privacy, harassment and ordinary crime exclusions remain enforced. Screening uses supplied title/summary metadata, not automatically fetched community bodies.

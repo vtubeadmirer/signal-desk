@@ -38,7 +38,7 @@ jobs:
         run: npm run build
 
       - name: Sidecar IPC regression tests
-        run: node --test tests/agent.test.cjs tests/backup.test.cjs tests/streams.test.cjs
+        run: node --test tests/agent.test.cjs tests/backup.test.cjs tests/streams.test.cjs tests/rejections.test.cjs
 
       - name: Build Python sidecar
         shell: pwsh

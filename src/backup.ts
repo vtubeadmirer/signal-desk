@@ -1,3 +1,4 @@
+import { rejectionValid, MAX_REJECTIONS, type RejectedItem } from "./rejections";
 import type { ArticleRecord, Candidate, Source } from "./types";
 
 export const MAX_BACKUP_BYTES = 4 * 1024 * 1024;
@@ -9,6 +10,7 @@ export type DeskBackup = {
   sources: Source[];
   provider: "codex";
   selectedBroadcastDate: string;
+  rejectedItems?: RejectedItem[];
 };
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -65,6 +67,7 @@ export function parseBackup(raw: string): DeskBackup {
   if (!timestamp(value.exportedAt) || value.provider !== "codex" || !date(value.selectedBroadcastDate)) throw new Error("백업 설정이나 날짜가 올바르지 않습니다.");
   if (!Array.isArray(value.sources) || value.sources.length > 50 || !value.sources.every(sourceValid)) throw new Error("백업의 수집 소스가 올바르지 않습니다.");
   if (!Array.isArray(value.articles) || value.articles.length > 2000) throw new Error("백업의 기사 목록이 올바르지 않습니다.");
+  if (value.rejectedItems !== undefined && (!Array.isArray(value.rejectedItems) || value.rejectedItems.length > MAX_REJECTIONS || !value.rejectedItems.every(rejectionValid) || new Set(value.rejectedItems.map((item) => item.id)).size !== value.rejectedItems.length)) throw new Error("백업의 제외 목록이 올바르지 않습니다.");
   const ids = new Set<string>();
   for (const record of value.articles) {
     if (!object(record) || !string(record.id, 2048) || !candidateValid(record.candidate) ||

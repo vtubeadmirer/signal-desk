@@ -36,6 +36,8 @@ def emergency_scope(item: dict) -> str | None:
 def excluded_topic(item: dict) -> bool:
     text = (str(item.get("title", "")) + " " + str(item.get("summary", ""))).lower()
     crime = ("살해", "살인", "살인미수", "실종", "시신", "변사체", "흉기", "칼부림", "성폭행", "성범죄", "강간", "납치", "자살", "극단적 선택", "아동학대", "폭행", "총격", "인명 사고", "사망 사고")
-    harassment = ("신상털", "신상 공개", "피해자 신상", "사생활 폭로", "혐오", "인종차별", "남혐", "여혐")
+    harassment = ("신상털", "신상 공개", "피해자 신상", "사생활 폭로", "혐오", "인종차별", "남혐", "여혐", "똥트남", "똥남아", "짱깨", "쪽바리", "깜둥", "조센징", "한남충", "한녀충", "김치녀", "맘충")
     adult = ("야짤", "후방주의", "후방 주의", "성인물", "성인만화", "떡툰", "노출짤", "19금")
-    return any(term in text for term in crime + harassment + adult)
+    conflict = ("사망", "암살", "미사일", "피격", "폭격", "공습", "테러", "인질", "용의자 체포")
+    return (any(term in text for term in crime + harassment + adult)
+            or (emergency_scope(item) != "domestic" and any(term in text for term in conflict)))

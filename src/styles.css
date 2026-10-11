@@ -213,3 +213,11 @@
 .brand small {font-size:10px;color:#8f98a7;letter-spacing:0;font-weight:500;}
 
 .saved-stream-filter {margin: 0 0 16px; flex-wrap: wrap;}
+
+.rejection-toolbar {display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:14px 0 20px;padding:14px;border:1px solid #323a45;border-radius:10px;background:#141920;font-size:12px;}
+.rejection-toolbar label,.candidate-checkbox {display:flex;align-items:center;gap:8px;cursor:pointer;}
+.rejection-toolbar span,.candidate-checkbox {color:#aeb6c3;}
+.candidate-checkbox {font-size:12px;margin-bottom:12px;}
+.excluded-row {display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 0;border-bottom:1px solid #323a45;}
+.excluded-row h2 {font-size:15px;line-height:1.6;}
+.excluded-row p {font-size:12px;color:#9aa4b2;}

@@ -71,8 +71,9 @@ export async function collect(
   sources: Source[],
   personalization: PersonalizationProfile = { keywords: [], categories: [], labels: [] },
   stream: "news" | "community" = "news",
+  excludedHashes: string[] = [],
 ) {
-  return callAgent({ op: "collect", sources, personalization, stream });
+  return callAgent({ op: "collect", sources, personalization, stream, excluded_hashes: excludedHashes });
 }
 
 export async function analyze(candidates: Candidate[], provider: string) {

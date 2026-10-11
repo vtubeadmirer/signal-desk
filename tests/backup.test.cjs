@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
+const rejectionApi = {};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync("src/rejections.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rejectionApi,URL,Date,Set,Map});
 const exportsObject = {};
-vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/backup.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:exportsObject,TextEncoder,URL,Date,Set,JSON});
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/backup.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:exportsObject,require:()=>rejectionApi,TextEncoder,URL,Date,Set,JSON});
 const api=exportsObject;
 function data() {
  const candidate={priority:1,slide_order:1,score:70,score_raw:12,talkability:80,verification_cost:40,context_required:30,source_count:1,category:'커뮤니티·밈',event_id:'event-1',title:'게임 밈',summary:'원문 확인',source_name:'루리웹',published_at:'2026-10-12T00:00:00Z',url:'https://bbs.ruliweb.com/best/board/1/read/2',keywords:['게임'],frames:['게임 경험'],source_ready:true,decision:'manual_review',content_type:'community',source_type:'community',collection_method:'public_list',usage_status:'review_required',confirmed_facts:['자료에 있는 내용'],caveats:['원문 확인'],discussion_points:['어떤 점이 재미있는가'],why_now:'최근 화제'};
@@ -32,4 +34,18 @@ test('failed restore rolls storage back without partially replacing data',()=>{
  const storage={getItem:k=>map.get(k)??null,removeItem:k=>map.delete(k),setItem:(k,v)=>{if(k==='sources'&&fail){fail=false;throw Error('quota');}map.set(k,v);}};
  assert.throws(()=>api.writeStorageAtomically(storage,{articles:'new articles',sources:'new sources'}));
  assert.equal(map.get('articles'),'old articles');assert.equal(map.get('sources'),'old sources');
+});
+
+test('backup preserves rejection preferences and accepts old backups without them',()=>{
+ const original=data();
+ original.rejectedItems=[{id:'https://example.com/excluded',url:'https://example.com/excluded',title:'제외한 게임 밈 제목',source_name:'Example',stream:'community',rejectedAt:'2026-10-12T00:00:00Z'}];
+ const restored=api.parseBackup(api.serializeBackup(original));
+ assert.deepEqual(restored.rejectedItems,original.rejectedItems);
+ delete original.rejectedItems;
+ assert.equal(api.parseBackup(api.serializeBackup(original)).rejectedItems,undefined);
+});
+test('invalid rejected-item backup does not reach restore',()=>{
+ const original=JSON.parse(api.serializeBackup(data()));
+ original.rejectedItems=[{id:'javascript:alert(1)',url:'javascript:alert(1)',title:'invalid',source_name:'Example',stream:'community',rejectedAt:'2026-10-12T00:00:00Z'}];
+ assert.throws(()=>api.parseBackup(JSON.stringify(original)));
 });
