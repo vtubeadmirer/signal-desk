@@ -1,5 +1,5 @@
 import { Command } from "@tauri-apps/plugin-shell";
-import type { AgentResponse, Source, Candidate } from "./types";
+import type { AgentResponse, Source, Candidate, PersonalizationProfile } from "./types";
 
 let command: Command<string> | null = null;
 let child: Awaited<ReturnType<Command<string>["spawn"]>> | null = null;
@@ -76,8 +76,15 @@ export async function health() {
   return callAgent({ op: "health" });
 }
 
-export async function collect(sources: Source[]) {
-  return callAgent({ op: "collect", sources });
+export async function collect(
+  sources: Source[],
+  personalization: PersonalizationProfile = {
+    keywords: [],
+    categories: [],
+    labels: [],
+  },
+) {
+  return callAgent({ op: "collect", sources, personalization });
 }
 
 export async function analyze(candidates: Candidate[], provider: string) {

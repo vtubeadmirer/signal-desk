@@ -385,6 +385,98 @@ def classify(item: dict) -> tuple[str, list[str], int, str]:
     return category, frames, min(18, raw), decision
 
 
+
+def political_score_rule(item: dict) -> str:
+    """Return emergency, creator_relevant, political, or normal."""
+    title = str(item.get("title", ""))
+    summary = str(item.get("summary", ""))
+    text = f"{title} {summary}".lower()
+
+    # 국가적 비상사태는 일반 정치 뉴스 점수 제한에서 예외 처리합니다.
+    emergency_terms = [
+        "비상계엄", "계엄령", "계엄 선포", "국가 비상사태",
+        "국가비상사태", "국가안보 위기", "국가 안보 위기",
+        "국가재난사태", "국가 재난 사태", "대규모 국가 재난",
+        "전쟁 발발", "전면전", "군사 침공", "쿠데타",
+    ]
+    if any(term in text for term in emergency_terms):
+        return "emergency"
+
+    # 크리에이터·게임·플랫폼 업계에 직접 관련된 정책 뉴스는 보존합니다.
+    creator_terms = [
+        "버튜버", "버추얼 유튜버", "버추얼 스트리머",
+        "스트리머", "크리에이터", "유튜버",
+        "치지직", "soop", "트위치",
+        "게임산업", "게임사", "게임업계", "게임 정책",
+        "게임 업데이트", "게임 패치", "확률형 아이템", "e스포츠",
+        "생성형 ai", "인공지능", "ai 영상", "ai 이미지",
+        "영상 생성 도구", "이미지 생성 도구", "comfyui",
+        "미드저니", "midjourney", "runway", "suno", "flux 모델",
+        "저작권", "플랫폼 정책", "방송 플랫폼",
+        "후원 수수료", "구독 수익", "콘텐츠 수익화",
+    ]
+    if any(term in text for term in creator_terms):
+        return "creator_relevant"
+
+    political_terms = [
+        "정치", "대통령", "국회", "국회의원", "국회의장",
+        "정당", "여당", "야당", "정치권", "공천", "탄핵",
+        "정쟁", "대선", "총선", "지방선거", "선거",
+        "국정감사", "당대표", "정치자금", "청문회",
+        "국무총리", "국무회의", "장관", "정부", "의원직",
+    ]
+    if any(term in text for term in political_terms):
+        return "political"
+
+    return "normal"
+
+
+def calculate_personalization_bonus(
+    item: dict,
+    category: str,
+    profile: dict | None,
+) -> int:
+    """Give a bounded bonus for previously saved topics and user labels."""
+    if not isinstance(profile, dict):
+        return 0
+
+    raw_keywords = profile.get("keywords", [])
+    raw_categories = profile.get("categories", [])
+    raw_labels = profile.get("labels", [])
+
+    keywords = {
+        str(value).strip().lower()
+        for value in raw_keywords[:250]
+        if isinstance(value, str) and len(value.strip()) >= 2
+    } if isinstance(raw_keywords, list) else set()
+
+    categories = {
+        str(value).strip()
+        for value in raw_categories[:30]
+        if isinstance(value, str)
+    } if isinstance(raw_categories, list) else set()
+
+    labels = [
+        str(value).strip().lower()
+        for value in raw_labels[:50]
+        if isinstance(value, str) and len(value.strip()) >= 2
+    ] if isinstance(raw_labels, list) else []
+
+    title = str(item.get("title", ""))
+    text = f"{title} {item.get('summary', '')}".lower()
+
+    try:
+        article_keywords = {str(value).lower() for value in tokens(title)}
+    except Exception:
+        article_keywords = set()
+
+    keyword_bonus = min(15, 3 * len(article_keywords.intersection(keywords)))
+    category_bonus = 5 if category in categories else 0
+    label_bonus = min(8, 3 * sum(1 for label in labels if label in text))
+
+    return min(25, keyword_bonus + category_bonus + label_bonus)
+
+
 def is_low_value_news(item: dict) -> bool:
     title = str(item.get("title", "")).strip()
     summary = str(item.get("summary", "")).strip()
@@ -419,7 +511,7 @@ def is_low_value_news(item: dict) -> bool:
     return False
 
 
-def build_candidates(items: list[dict]) -> list[dict]:
+def build_candidates(items: list[dict], personalization: dict | None = None) -> list[dict]:
     now = datetime.now(timezone.utc)
     items = [item for item in items if not is_low_value_news(item)]
     groups: list[list[dict]] = []
@@ -472,10 +564,30 @@ def build_candidates(items: list[dict]) -> list[dict]:
         category, frames, raw, decision = classify(primary)
         if decision == "exclude":
             continue
+
         unique_sources = sorted({x.get("source_name", "") for x in group if x.get("source_name")})
-        score = round((raw / 18) * 100)
+        base_score = round((raw / 18) * 100)
+        political_rule = political_score_rule(primary)
+        personal_bonus = calculate_personalization_bonus(
+            primary, category, personalization
+        )
+
+        # 일반 정치 뉴스는 개인화 점수로 다시 올라오지 않도록 최하위 점수를 적용합니다.
+        if political_rule == "political":
+            score = 0
+            personal_bonus = 0
+        elif political_rule == "emergency":
+            # 국가적 비상사태는 일반 정치 뉴스와 구분해 우선순위를 높입니다.
+            score = min(100, base_score + 25)
+            personal_bonus = 0
+        else:
+            score = min(100, base_score + personal_bonus)
+
         text = f"{primary.get('title','')} {primary.get('summary','')}"
-        talkability = min(100, 35 + len(frames) * 12 + score // 2)
+        talkability = (
+            0 if political_rule == "political"
+            else min(100, 35 + len(frames) * 12 + score // 2)
+        )
         verification_cost = 75 if decision == "manual_review" else max(10, 55 - len(unique_sources) * 10)
         context_required = min(100, 30 + (15 if "정책" in text else 0) + (10 if len(primary.get("summary", "")) < 60 else 0))
         output.append({
@@ -489,7 +601,9 @@ def build_candidates(items: list[dict]) -> list[dict]:
             "collection_method": primary.get("collection_method", "rss"),
             "usage_status": primary.get("usage_status", "review_required"),
             "score": score,
-            "score_raw": raw,
+            "score_raw": 0 if political_rule == "political" else raw,
+            "personalization_bonus": personal_bonus,
+            "political_penalty": political_rule == "political",
             "talkability": talkability,
             "verification_cost": verification_cost,
             "source_ready": bool(primary.get("url")) and decision != "exclude",
@@ -623,7 +737,10 @@ def handle(request: dict) -> dict:
                 items.extend(fetch_source(source))
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{safe_text(str(source.get('name','source')),100)}: 피드 수집 실패")
-        candidates = build_candidates(items)
+        personalization = request.get("personalization", {})
+        if not isinstance(personalization, dict):
+            personalization = {}
+        candidates = build_candidates(items, personalization)
         return {"ok": True, "op": op, "candidates": candidates, "message": f"수집 {len(items)}건 → 후보 {len(candidates)}건", "errors": errors}
     if op == "analyze":
         candidates = request.get("candidates", [])

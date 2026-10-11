@@ -351,5 +351,89 @@ class SignalDeskSecurityTests(unittest.TestCase):
         self.assertIn("기사 본문 내용", result[0]["summary"])
         self.assertNotIn("<p>", result[0]["summary"])
 
+
+    def test_generic_political_news_gets_minimum_score(self):
+        items = [{
+            "title": "여야, 국회에서 예산안을 두고 충돌",
+            "summary": "정당 간 정치 공방이 이어지고 있다.",
+            "url": "https://example.com/politics",
+            "published_at": "2026-10-11T07:00:00+00:00",
+            "source_name": "Example News",
+            "tier": "professional",
+            "category": "사회·생활",
+            "source_type": "media",
+            "content_type": "news",
+            "collection_method": "rss",
+            "usage_status": "review_required",
+        }]
+        out = build_candidates(items)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["score"], 0)
+        self.assertEqual(out[0]["score_raw"], 0)
+        self.assertTrue(out[0]["political_penalty"])
+
+    def test_national_emergency_is_not_given_political_floor(self):
+        items = [{
+            "title": "대통령, 비상계엄 선포로 국가 비상사태 발표",
+            "summary": "국가적 비상사태 대응이 시작됐다.",
+            "url": "https://example.com/emergency",
+            "published_at": "2026-10-11T07:00:00+00:00",
+            "source_name": "Example News",
+            "tier": "professional",
+            "category": "사회·생활",
+            "source_type": "media",
+            "content_type": "news",
+            "collection_method": "rss",
+            "usage_status": "review_required",
+        }]
+        out = build_candidates(items)
+        self.assertEqual(len(out), 1)
+        self.assertGreater(out[0]["score"], 0)
+        self.assertFalse(out[0]["political_penalty"])
+
+    def test_creator_industry_policy_is_not_given_political_floor(self):
+        items = [{
+            "title": "국회, 확률형 아이템 규제 법안 논의",
+            "summary": "게임업계와 이용자에게 영향을 줄 규정이 논의됐다.",
+            "url": "https://example.com/game-policy",
+            "published_at": "2026-10-11T07:00:00+00:00",
+            "source_name": "Example News",
+            "tier": "professional",
+            "category": "사회·생활",
+            "source_type": "media",
+            "content_type": "news",
+            "collection_method": "rss",
+            "usage_status": "review_required",
+        }]
+        out = build_candidates(items)
+        self.assertEqual(len(out), 1)
+        self.assertGreater(out[0]["score"], 0)
+        self.assertFalse(out[0]["political_penalty"])
+
+    def test_personalization_increases_matching_article_score(self):
+        item = {
+            "title": "AI 영상 생성 도구의 신규 기능 공개",
+            "summary": "영상 제작 도구의 업데이트와 기능을 소개한다.",
+            "url": "https://example.com/ai-video",
+            "published_at": "2026-10-11T07:00:00+00:00",
+            "source_name": "Example IT",
+            "tier": "professional",
+            "category": "IT·플랫폼",
+            "source_type": "media",
+            "content_type": "news",
+            "collection_method": "rss",
+            "usage_status": "review_required",
+        }
+        baseline = build_candidates([item])
+        personalized = build_candidates([item], {
+            "keywords": ["영상", "생성"],
+            "categories": [],
+            "labels": [],
+        })
+        self.assertEqual(len(baseline), 1)
+        self.assertEqual(len(personalized), 1)
+        self.assertGreater(personalized[0]["score"], baseline[0]["score"])
+        self.assertGreater(personalized[0]["personalization_bonus"], 0)
+
 if __name__ == "__main__":
     unittest.main()

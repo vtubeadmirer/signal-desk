@@ -27,3 +27,181 @@
   overflow-wrap: anywhere;
   line-height: 1.7;
 }
+
+
+/* Signal Desk: personal saves, broadcast preparation, archive, and settings */
+.broadcast-target,
+.page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 17px 20px;
+  margin: 0 0 18px;
+  border: 1px solid #272d35;
+  border-radius: 14px;
+  background: #11151a;
+}
+.broadcast-target > div,
+.page-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.broadcast-target strong { font-size: 13px; }
+.broadcast-target span,
+.page-heading p {
+  margin: 0;
+  color: #8f98a7;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.page-heading h1 { margin: 0; font-size: 26px; }
+.date-input,
+.archive-search,
+.label-editor input,
+.note-field textarea {
+  background: #0d1014;
+  border: 1px solid #303742;
+  border-radius: 8px;
+  color: #e2e7ee;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 12px;
+  min-width: 0;
+}
+.date-input { min-height: 38px; }
+.date-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: #aeb6c3;
+  white-space: nowrap;
+}
+.article-actions,
+.saved-card-actions,
+.label-editor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.article-actions { margin-top: 14px; }
+.article-actions .secondary,
+.label-editor .secondary,
+.saved-card-actions .secondary {
+  height: 34px;
+  padding: 0 11px;
+  font-size: 11px;
+}
+.secondary.selected {
+  border-color: #438d70;
+  background: #14251f;
+  color: #8be0b8;
+}
+.personal-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.personal-labels button {
+  border: 1px solid #35404a;
+  border-radius: 999px;
+  color: #b9d7ca;
+  background: #17201e;
+  padding: 4px 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.personalize-details {
+  margin-top: 12px;
+  color: #aeb6c3;
+  font-size: 12px;
+}
+.personalize-details summary { cursor: pointer; }
+.label-editor { margin-top: 10px; }
+.label-editor input { flex: 1; min-width: 180px; }
+.saved-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.saved-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #272d35;
+  border-radius: 15px;
+  background: #11151a;
+}
+.saved-card h2 { font-size: 17px; line-height: 1.4; margin: 14px 0 8px; overflow-wrap: anywhere; }
+.saved-card .summary { min-height: 0; }
+.saved-card .card-footer { gap: 12px; align-items: flex-start; }
+.saved-card-actions { justify-content: flex-end; }
+.note-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 14px;
+  color: #969fad;
+  font-size: 11px;
+}
+.note-field textarea {
+  resize: vertical;
+  width: 100%;
+  line-height: 1.6;
+}
+.saved-dates,.saved-note {
+  color: #aeb6c3;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.archive-search { width: min(340px, 100%); }
+.settings-switch { padding-top: 14px; padding-bottom: 0; }
+.settings-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid #272d35;
+  border-radius: 12px;
+  background: #11151a;
+}
+.settings-subtabs button {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9ba4b1;
+  padding: 10px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.settings-subtabs button.active {
+  background: #252c35;
+  color: #fff;
+}
+.rules-list { display: grid; gap: 10px; margin-top: 22px; }
+.rule-item {
+  padding: 16px;
+  border: 1px solid #292f38;
+  border-radius: 10px;
+  background: #0d1116;
+}
+.rule-item strong { font-size: 13px; }
+.rule-item p {
+  margin: 7px 0 0;
+  color: #9aa4b2;
+  line-height: 1.65;
+  font-size: 12px;
+}
+@media(max-width: 760px) {
+  .broadcast-target,.page-heading { align-items: stretch; flex-direction: column; }
+  .date-control { justify-content: space-between; }
+  .saved-list { grid-template-columns: 1fr; }
+  .archive-search { width: 100%; }
+  .saved-card .card-footer { flex-direction: column; }
+  .saved-card-actions { justify-content: flex-start; }
+}

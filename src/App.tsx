@@ -2,10 +2,55 @@ import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { analyze, collect, health } from "./agent";
-import type { Candidate, Source } from "./types";
+import type { ArticleRecord, Candidate, PersonalizationProfile, Source } from "./types";
 
 const STORAGE_KEY = "signal-desk:sources:v1";
 const PROVIDER_KEY = "signal-desk:provider:v1";
+const ARTICLES_KEY = "signal-desk:articles:v1";
+
+function articleId(url: string): string {
+  return url.trim().split("#", 1)[0].replace(/\/+$/, "");
+}
+
+function localDateKey(): string {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isSavedArticle(record: ArticleRecord): boolean {
+  return Boolean(
+    record.interested ||
+    record.labels.length ||
+    record.note.trim() ||
+    record.broadcastDates.length
+  );
+}
+
+function loadSavedArticles(): ArticleRecord[] {
+  try {
+    const raw = localStorage.getItem(ARTICLES_KEY);
+    if (!raw) return [];
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is ArticleRecord =>
+      Boolean(
+        item &&
+        typeof item.id === "string" &&
+        item.candidate &&
+        typeof item.candidate.url === "string" &&
+        typeof item.interested === "boolean" &&
+        Array.isArray(item.labels) &&
+        Array.isArray(item.broadcastDates) &&
+        typeof item.note === "string"
+      )
+    );
+  } catch {
+    return [];
+  }
+}
 
 const DEFAULT_SOURCES: Source[] = [
   {
@@ -94,12 +139,17 @@ function summaryPreview(value?: string | null): string {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<"today" | "sources" | "security">("today");
+  const [tab, setTab] = useState<"today" | "prep" | "archive" | "settings">("today");
+  const [settingsSection, setSettingsSection] = useState<"sources" | "rules" | "security">("sources");
   const [sources, setSources] = useState<Source[]>(loadSources);
   const [provider, setProvider] = useState(localStorage.getItem(PROVIDER_KEY) ?? "codex");
   const [status, setStatus] = useState("준비됨");
   const [providerStatus, setProviderStatus] = useState<{ installed: boolean; authenticated?: boolean; version?: string; auth_hint?: string } | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [savedArticles, setSavedArticles] = useState<ArticleRecord[]>(loadSavedArticles);
+  const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(localDateKey);
+  const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
+  const [archiveQuery, setArchiveQuery] = useState("");
   const [filter, setFilter] = useState("전체");
   const [showMoreCandidates, setShowMoreCandidates] = useState(false);
   const [running, setRunning] = useState(false);
@@ -114,6 +164,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(PROVIDER_KEY, provider);
   }, [provider]);
+
+  useEffect(() => {
+    localStorage.setItem(ARTICLES_KEY, JSON.stringify(savedArticles));
+  }, [savedArticles]);
 
   async function refreshHealth() {
     try {
@@ -155,13 +209,151 @@ export default function App() {
 
   const visibleCandidates = showMoreCandidates ? filtered : filtered.slice(0, 10);
 
+  const personalization = useMemo<PersonalizationProfile>(() => {
+    const chosen = savedArticles.filter((record) =>
+      record.interested || record.broadcastDates.length > 0 || record.labels.length > 0
+    );
+    const keywords = new Set<string>();
+    const categories = new Set<string>();
+    const labels = new Set<string>();
+
+    for (const record of chosen) {
+      categories.add(record.candidate.category);
+      for (const keyword of record.candidate.keywords ?? []) {
+        if (keyword.trim()) keywords.add(keyword.trim());
+      }
+      for (const label of record.labels) {
+        if (!label.trim()) continue;
+        labels.add(label.trim());
+        label.split(/[·,\/\s]+/).filter((word) => word.length >= 2).forEach((word) => keywords.add(word));
+      }
+    }
+
+    return {
+      keywords: Array.from(keywords).slice(0, 250),
+      categories: Array.from(categories).slice(0, 30),
+      labels: Array.from(labels).slice(0, 50),
+    };
+  }, [savedArticles]);
+
+  const archiveRecords = useMemo(() => {
+    const query = archiveQuery.trim().toLocaleLowerCase();
+    return savedArticles
+      .filter(isSavedArticle)
+      .filter((record) => {
+        if (!query) return true;
+        const text = [
+          record.candidate.title,
+          record.candidate.summary,
+          record.candidate.category,
+          record.candidate.source_name,
+          ...record.labels,
+          record.note,
+        ].join(" ").toLocaleLowerCase();
+        return text.includes(query);
+      })
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, [savedArticles, archiveQuery]);
+
+  function updateArticleRecord(
+    item: Candidate,
+    change: (record: ArticleRecord) => ArticleRecord,
+  ) {
+    const id = articleId(item.url);
+    if (!id) return;
+    const now = new Date().toISOString();
+
+    setSavedArticles((current) => {
+      const existing = current.find((record) => record.id === id);
+      const base: ArticleRecord = existing ?? {
+        id,
+        candidate: item,
+        interested: false,
+        labels: [],
+        note: "",
+        broadcastDates: [],
+        savedAt: now,
+        updatedAt: now,
+      };
+      const updated = { ...change(base), candidate: item, updatedAt: now };
+      const remaining = current.filter((record) => record.id !== id);
+      return isSavedArticle(updated) ? [...remaining, updated] : remaining;
+    });
+  }
+
+  function updateRecord(
+    id: string,
+    change: (record: ArticleRecord) => ArticleRecord,
+  ) {
+    const now = new Date().toISOString();
+    setSavedArticles((current) =>
+      current
+        .map((record) => record.id === id ? { ...change(record), updatedAt: now } : record)
+        .filter(isSavedArticle)
+    );
+  }
+
+  function removeRecord(id: string) {
+    setSavedArticles((current) => current.filter((record) => record.id !== id));
+  }
+
+  function toggleInterest(item: Candidate) {
+    updateArticleRecord(item, (record) => ({
+      ...record,
+      interested: !record.interested,
+    }));
+  }
+
+  function toggleBroadcastDate(item: Candidate) {
+    updateArticleRecord(item, (record) => {
+      const alreadyAdded = record.broadcastDates.includes(selectedBroadcastDate);
+      return {
+        ...record,
+        broadcastDates: alreadyAdded
+          ? record.broadcastDates.filter((date) => date !== selectedBroadcastDate)
+          : [...record.broadcastDates, selectedBroadcastDate].sort(),
+      };
+    });
+  }
+
+  function addLabel(item: Candidate) {
+    const id = articleId(item.url);
+    const label = (labelDrafts[id] ?? "").trim().slice(0, 40);
+    if (!label) return;
+
+    updateArticleRecord(item, (record) => ({
+      ...record,
+      labels: record.labels.some((value) => value.toLocaleLowerCase() === label.toLocaleLowerCase())
+        ? record.labels
+        : [...record.labels, label].slice(0, 20),
+    }));
+    setLabelDrafts((current) => ({ ...current, [id]: "" }));
+  }
+
+  function removeLabel(id: string, label: string) {
+    updateRecord(id, (record) => ({
+      ...record,
+      labels: record.labels.filter((value) => value !== label),
+    }));
+  }
+
   async function runCollection() {
     setRunning(true);
     setStatus("뉴스 수집 및 1차 압축 중…");
     try {
-      const r = await collect(sources.filter((s) => s.enabled));
+      const r = await collect(sources.filter((s) => s.enabled), personalization);
       if (!r.ok) throw new Error(r.error ?? "수집 실패");
-      setCandidates(r.candidates ?? []);
+      const freshCandidates = r.candidates ?? [];
+      setCandidates(freshCandidates);
+      setSavedArticles((current) => {
+        const freshById = new Map(freshCandidates.map((item) => [articleId(item.url), item]));
+        return current.map((record) => {
+          const fresh = freshById.get(record.id);
+          return fresh
+            ? { ...record, candidate: fresh, updatedAt: new Date().toISOString() }
+            : record;
+        });
+      });
       setShowMoreCandidates(false);
       setLastRun(new Date().toLocaleString("ko-KR"));
       setStatus(`${r.candidates?.length ?? 0}개 후보를 만들었습니다.`);
@@ -180,7 +372,11 @@ export default function App() {
     try {
       const r = await analyze(candidates.slice(0, 15), provider);
       if (!r.ok) throw new Error(r.error ?? "AI 분석 실패");
-      setCandidates(r.candidates ?? candidates);
+      const analyzedById = new Map((r.candidates ?? []).map((item) => [item.event_id, item]));
+      setCandidates(candidates.map((item) => ({
+        ...item,
+        ...(analyzedById.get(item.event_id) ?? {}),
+      })));
       setStatus("AI 분석 완료");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "AI 분석 중 오류가 발생했습니다.");
@@ -229,9 +425,10 @@ export default function App() {
       </header>
 
       <nav className="tabs">
-        <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>오늘</button>
-        <button className={tab === "sources" ? "active" : ""} onClick={() => setTab("sources")}>뉴스 소스</button>
-        <button className={tab === "security" ? "active" : ""} onClick={() => setTab("security")}>보안</button>
+        <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>뉴스</button>
+        <button className={tab === "prep" ? "active" : ""} onClick={() => setTab("prep")}>방송 준비</button>
+        <button className={tab === "archive" ? "active" : ""} onClick={() => setTab("archive")}>보관함</button>
+        <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>환경설정</button>
       </nav>
 
       {tab === "today" && (
@@ -250,6 +447,21 @@ export default function App() {
                 AI 분석
               </button>
             </div>
+          </section>
+
+          <section className="broadcast-target">
+            <div>
+              <strong>방송 예정일</strong>
+              <span>기사의 「방송 준비에 담기」를 누르면 이 날짜에 저장됩니다.</span>
+            </div>
+            <input
+              className="date-input"
+              type="date"
+              aria-label="방송 예정일"
+              value={selectedBroadcastDate}
+              onChange={(event) => setSelectedBroadcastDate(event.target.value)}
+            />
+            <button className="secondary" onClick={() => setTab("prep")}>방송 준비 열기</button>
           </section>
 
           <section className="control-row">
@@ -286,7 +498,55 @@ export default function App() {
                   <span>대화성 {item.talkability}</span>
                   <span>검증비용 {item.verification_cost}</span>
                   <span>출처 {item.source_count}</span>
+                  {item.personalization_bonus ? <span>관심 주제 +{item.personalization_bonus}</span> : null}
                 </div>
+                <div className="article-actions">
+                  <button
+                    className={savedArticles.some((record) => record.id === articleId(item.url) && record.interested) ? "secondary selected" : "secondary"}
+                    aria-pressed={savedArticles.some((record) => record.id === articleId(item.url) && record.interested)}
+                    onClick={() => toggleInterest(item)}
+                  >
+                    {savedArticles.some((record) => record.id === articleId(item.url) && record.interested) ? "♥ 관심 저장됨" : "♡ 관심 뉴스"}
+                  </button>
+                  <button
+                    className={savedArticles.some((record) => record.id === articleId(item.url) && record.broadcastDates.includes(selectedBroadcastDate)) ? "secondary selected" : "secondary"}
+                    aria-pressed={savedArticles.some((record) => record.id === articleId(item.url) && record.broadcastDates.includes(selectedBroadcastDate))}
+                    onClick={() => toggleBroadcastDate(item)}
+                  >
+                    {savedArticles.some((record) => record.id === articleId(item.url) && record.broadcastDates.includes(selectedBroadcastDate)) ? "방송 준비에서 빼기" : "＋ 방송 준비에 담기"}
+                  </button>
+                </div>
+                {savedArticles.some((record) => record.id === articleId(item.url) && record.labels.length > 0) && (
+                  <div className="personal-labels">
+                    {savedArticles.find((record) => record.id === articleId(item.url))?.labels.map((label) => (
+                      <button key={label} title="이 분류 삭제" onClick={() => removeLabel(articleId(item.url), label)}>
+                        {label} ×
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <details className="personalize-details">
+                  <summary>내 분류 추가</summary>
+                  <div className="label-editor">
+                    <input
+                      value={labelDrafts[articleId(item.url)] ?? ""}
+                      maxLength={40}
+                      placeholder="예: AI 영상, 밈·커뮤니티"
+                      aria-label="기사 개인 분류"
+                      onChange={(event) => setLabelDrafts((current) => ({
+                        ...current,
+                        [articleId(item.url)]: event.target.value,
+                      }))}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          addLabel(item);
+                        }
+                      }}
+                    />
+                    <button className="secondary" onClick={() => addLabel(item)}>분류 저장</button>
+                  </div>
+                </details>
                 {item.discussion_points?.length ? (
                   <div className="discussion">
                     <div className="label">얘기할 포인트</div>
@@ -315,7 +575,170 @@ export default function App() {
         </main>
       )}
 
-      {tab === "sources" && (
+      {tab === "prep" && (
+        <main className="content">
+          <section className="page-heading">
+            <div>
+              <span className="eyebrow">STREAM PLAN</span>
+              <h1>방송 준비</h1>
+              <p>방송 날짜별로 기사를 모으고 메모를 남기세요. 같은 기사를 여러 방송 날짜에 담을 수도 있습니다.</p>
+            </div>
+            <label className="date-control">
+              방송 날짜
+              <input
+                className="date-input"
+                type="date"
+                value={selectedBroadcastDate}
+                onChange={(event) => setSelectedBroadcastDate(event.target.value)}
+              />
+            </label>
+          </section>
+          <section className="saved-list">
+            {savedArticles
+              .filter((record) => record.broadcastDates.includes(selectedBroadcastDate))
+              .sort((a, b) => a.candidate.score < b.candidate.score ? 1 : -1)
+              .map((record) => (
+                <article className="saved-card" key={record.id}>
+                  <div className="signal-meta">
+                    <span className="badge">{record.candidate.category}</span>
+                    <span className="decision candidate">점수 {record.candidate.score}</span>
+                  </div>
+                  <h2>{record.candidate.title}</h2>
+                  <p className="summary">{summaryPreview(record.candidate.why_now?.trim() || record.candidate.summary)}</p>
+                  {record.labels.length > 0 && (
+                    <div className="personal-labels">
+                      {record.labels.map((label) => (
+                        <button key={label} title="이 분류 삭제" onClick={() => removeLabel(record.id, label)}>{label} ×</button>
+                      ))}
+                    </div>
+                  )}
+                  <label className="note-field">
+                    방송 메모
+                    <textarea
+                      rows={3}
+                      maxLength={1000}
+                      value={record.note}
+                      placeholder="이 기사를 방송에서 어떻게 소개할지 메모하세요."
+                      onChange={(event) => updateRecord(record.id, (current) => ({
+                        ...current,
+                        note: event.target.value,
+                      }))}
+                    />
+                  </label>
+                  <div className="card-footer">
+                    <span>{record.candidate.source_name}</span>
+                    <div className="saved-card-actions">
+                      <button className="link" onClick={() => void openUrl(record.candidate.url)}>원문 보기 ↗</button>
+                      <button
+                        className="danger"
+                        onClick={() => updateRecord(record.id, (current) => ({
+                          ...current,
+                          broadcastDates: current.broadcastDates.filter((date) => date !== selectedBroadcastDate),
+                        }))}
+                      >
+                        이 날짜에서 제거
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            {!savedArticles.some((record) => record.broadcastDates.includes(selectedBroadcastDate)) && (
+              <div className="empty-card">
+                <strong>이 날짜에 준비한 기사가 없습니다.</strong>
+                <span>뉴스 화면에서 방송 날짜를 선택한 뒤 「방송 준비에 담기」를 눌러 보세요.</span>
+                <button className="secondary" onClick={() => setTab("today")}>뉴스 보러 가기</button>
+              </div>
+            )}
+          </section>
+        </main>
+      )}
+
+      {tab === "archive" && (
+        <main className="content">
+          <section className="page-heading">
+            <div>
+              <span className="eyebrow">SAVED STORIES</span>
+              <h1>보관함</h1>
+              <p>관심 뉴스, 직접 분류한 기사, 방송 준비에 담은 기사를 검색할 수 있습니다.</p>
+            </div>
+            <input
+              className="archive-search"
+              value={archiveQuery}
+              placeholder="제목·분류·메모 검색"
+              aria-label="보관함 검색"
+              onChange={(event) => setArchiveQuery(event.target.value)}
+            />
+          </section>
+          <section className="saved-list">
+            {archiveRecords.map((record) => (
+              <article className="saved-card" key={record.id}>
+                <div className="signal-meta">
+                  <span className="badge">{record.candidate.category}</span>
+                  {record.interested && <span className="decision candidate">관심 뉴스</span>}
+                </div>
+                <h2>{record.candidate.title}</h2>
+                <p className="summary">{summaryPreview(record.candidate.why_now?.trim() || record.candidate.summary)}</p>
+                {record.broadcastDates.length > 0 && (
+                  <p className="saved-dates">방송 날짜: {record.broadcastDates.join(", ")}</p>
+                )}
+                {record.labels.length > 0 && (
+                  <div className="personal-labels">
+                    {record.labels.map((label) => (
+                      <button key={label} title="이 분류 삭제" onClick={() => removeLabel(record.id, label)}>{label} ×</button>
+                    ))}
+                  </div>
+                )}
+                {record.note.trim() && <p className="saved-note">메모: {record.note}</p>}
+                <div className="card-footer">
+                  <span>{record.candidate.source_name}</span>
+                  <div className="saved-card-actions">
+                    <button
+                      className="link"
+                      onClick={() => void openUrl(record.candidate.url)}
+                    >
+                      원문 보기 ↗
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() => {
+                        updateRecord(record.id, (current) => ({
+                          ...current,
+                          broadcastDates: current.broadcastDates.includes(selectedBroadcastDate)
+                            ? current.broadcastDates
+                            : [...current.broadcastDates, selectedBroadcastDate].sort(),
+                        }));
+                        setTab("prep");
+                      }}
+                    >
+                      방송 준비에 담기
+                    </button>
+                    <button className="danger" onClick={() => removeRecord(record.id)}>보관함에서 제거</button>
+                  </div>
+                </div>
+              </article>
+            ))}
+            {archiveRecords.length === 0 && (
+              <div className="empty-card">
+                <strong>{archiveQuery.trim() ? "검색 결과가 없습니다." : "아직 저장된 기사가 없습니다."}</strong>
+                <span>뉴스 화면에서 관심 뉴스, 방송 준비 또는 개인 분류를 이용해 기사를 저장하세요.</span>
+                {!archiveQuery.trim() && <button className="secondary" onClick={() => setTab("today")}>뉴스 보러 가기</button>}
+              </div>
+            )}
+          </section>
+        </main>
+      )}
+
+      {tab === "settings" && (
+        <div className="content narrow settings-switch">
+          <nav className="settings-subtabs">
+            <button className={settingsSection === "sources" ? "active" : ""} onClick={() => setSettingsSection("sources")}>뉴스 소스</button>
+            <button className={settingsSection === "rules" ? "active" : ""} onClick={() => setSettingsSection("rules")}>뉴스 선별</button>
+            <button className={settingsSection === "security" ? "active" : ""} onClick={() => setSettingsSection("security")}>보안</button>
+          </nav>
+        </div>
+      )}
+
+      {tab === "settings" && settingsSection === "sources" && (
         <main className="content narrow">
           <section className="panel">
             <div className="panel-head">
@@ -351,7 +774,39 @@ export default function App() {
         </main>
       )}
 
-      {tab === "security" && (
+      {tab === "settings" && settingsSection === "rules" && (
+        <main className="content narrow">
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <span className="eyebrow">EDITORIAL RULES</span>
+                <h1>뉴스 선별 기준</h1>
+                <p>현재 적용되는 기본 규칙입니다. 세부 점수 조절은 향후 설정으로 확장할 수 있습니다.</p>
+              </div>
+            </div>
+            <div className="rules-list">
+              <div className="rule-item">
+                <strong>일반 정치 뉴스</strong>
+                <p>등록된 정치 관련 키워드에 해당하고 업계 직접 관련성이 감지되지 않은 기사는 최하위 점수인 0점을 받습니다.</p>
+              </div>
+              <div className="rule-item">
+                <strong>국가적 비상사태</strong>
+                <p>계엄령, 국가 비상사태, 전쟁 발발, 쿠데타 등 등록된 예외 키워드는 일반 정치 뉴스 규칙보다 우선합니다.</p>
+              </div>
+              <div className="rule-item">
+                <strong>스트리머 관련 산업 뉴스</strong>
+                <p>버튜버, 크리에이터, 게임, 방송 플랫폼, AI 제작 도구 등 업계에 직접 영향을 주는 기사는 정치 키워드가 포함되어도 일괄 최하위 처리하지 않습니다.</p>
+              </div>
+              <div className="rule-item">
+                <strong>개인 관심 반영</strong>
+                <p>관심 표시, 방송 준비, 개인 분류에서 모은 키워드를 다음 수집의 점수 계산에 전달합니다. 현재 개인화 가산점의 최대치는 25점입니다.</p>
+              </div>
+            </div>
+          </section>
+        </main>
+      )}
+
+      {tab === "settings" && settingsSection === "security" && (
         <main className="content narrow">
           <section className="security-grid">
             <div className="security-card"><span>01</span><strong>인증정보 비수집</strong><p>Signal Desk는 ChatGPT 비밀번호나 provider 토큰을 직접 받지 않는 구조를 사용합니다.</p></div>

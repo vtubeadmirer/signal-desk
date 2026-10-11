@@ -18,6 +18,8 @@ export type Candidate = {
   usage_status: "official_feed" | "review_required" | "permission_required" | "blocked";
   score: number;
   score_raw: number;
+  personalization_bonus?: number;
+  political_penalty?: boolean;
   talkability: number;
   verification_cost: number;
   source_ready: boolean;
@@ -45,4 +47,22 @@ export type AgentResponse = {
   sources?: Source[];
   provider?: { name: string; installed: boolean; authenticated?: boolean; version?: string; auth_hint?: string };
   message?: string;
+};
+
+
+export type PersonalizationProfile = {
+  keywords: string[];
+  categories: string[];
+  labels: string[];
+};
+
+export type ArticleRecord = {
+  id: string;
+  candidate: Candidate;
+  interested: boolean;
+  labels: string[];
+  note: string;
+  broadcastDates: string[];
+  savedAt: string;
+  updatedAt: string;
 };
