@@ -205,3 +205,9 @@
   .saved-card .card-footer { flex-direction: column; }
   .saved-card-actions { justify-content: flex-start; }
 }
+
+.source-row {grid-template-columns: 24px minmax(140px,1fr) minmax(240px,2fr) 140px 110px 150px auto;}
+.backup-preview {margin-top:20px; padding:20px; border:1px solid #39414c; border-radius:12px; background:#171c25;}
+.community-metrics {color:#9aa4b2;font-size:12px;}
+
+.brand small {font-size:10px;color:#8f98a7;letter-spacing:0;font-weight:500;}

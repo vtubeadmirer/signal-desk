@@ -46,3 +46,7 @@ Before production:
 ## Known limitation of v0.1
 
 The end-user provider binary (for example, Codex CLI) is not redistributed by this repository. The app detects the official provider CLI and guides the user to its official installation/authentication path. This is intentional: bundling or downloading third-party provider binaries without first reviewing their distribution terms would weaken the supply-chain model.
+
+## Community and backup boundaries
+
+Public-list community collection is limited to the supported hosts and list paths, checks robots.txt before uncached fetches, and reuses the DNS-pinned HTTPS transport. No post bodies or comments are fetched. Community popularity never overrides editorial exclusions or manual review. Native backup dialogs grant file scope only for selected paths; no global filesystem scope is configured. Imported JSON is version/shape/size/link validated before explicit replacement of local state. Exported JSON contains no provider tokens.
