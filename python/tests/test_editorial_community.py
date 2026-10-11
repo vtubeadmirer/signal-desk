@@ -12,7 +12,7 @@ class EditorialTests(unittest.TestCase):
     def test_domestic_emergency_requires_clear_country(self):
         self.assertEqual(emergency_scope({'title':'대한민국 대통령, 비상계엄 선포'}),'domestic')
         self.assertEqual(emergency_scope({'title':'대한민국 국가 비상사태 선언, 해외 반응'}),'domestic')
-        for title in ['페루 국가 비상사태 선포, 한국 여행객 주의','한국 정부, 페루 국가 비상사태 관련 여행 경보','이스라엘 국가 비상사태 선포','대통령 비상계엄 선포']:
+        for title in ['페루 국가 비상사태 선포, 한국 여행객 주의','한국 정부, 페루 국가 비상사태 관련 여행 경보','이스라엘 국가 비상사태 선포','에콰도르 9개 주 비상사태 선포','대통령 비상계엄 선포']:
             self.assertEqual(emergency_scope({'title':title}),'foreign_or_unknown',title)
 
     def test_crime_exclusion_precedes_personalization(self):

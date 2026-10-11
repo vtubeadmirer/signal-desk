@@ -231,7 +231,7 @@ def _fetch_pinned_https(url: str, host: str, ip_addresses: list[str]) -> bytes:
     raise ValueError("피드 서버 연결에 실패했습니다.")
 
 
-_community_cache: dict[str, tuple[float, bytes]] = {}
+_community_cache: dict[str, tuple[float, bytes, datetime]] = {}
 
 
 def fetch_source(source: dict) -> list[dict]:
@@ -240,18 +240,19 @@ def fetch_source(source: dict) -> list[dict]:
         url, host, addresses = resolve_public_url(source["url"])
         cached = _community_cache.get(url)
         if cached and time.monotonic() - cached[0] < 300:
-            return parse_community(cached[1], source)
+            return parse_community(cached[1], source, cached[2])
         robots_url, robots_host, robots_addresses = resolve_public_url(f"https://{host}/robots.txt")
         robots = _fetch_pinned_https(robots_url, robots_host, robots_addresses).decode("utf-8", "replace")
         if not robots_allowed(robots, url):
             raise ValueError("공개 목록 수집이 robots.txt에서 제한되었습니다.")
         data = _fetch_pinned_https(url, host, addresses)
-        items = parse_community(data, source)
+        fetched_at = datetime.now(timezone.utc)
+        items = parse_community(data, source, fetched_at)
         if not items:
             raise ValueError("목록을 읽지 못했습니다. 접근 제한 또는 페이지 변경을 확인하세요.")
         if len(_community_cache) >= 50:
             _community_cache.pop(next(iter(_community_cache)))
-        _community_cache[url] = (time.monotonic(), data)
+        _community_cache[url] = (time.monotonic(), data, fetched_at)
         return items
 
     url, host, addresses = resolve_public_url(str(source.get("url", "")))
