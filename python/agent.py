@@ -21,6 +21,7 @@ from urllib.parse import urljoin, urlparse
 import xml.etree.ElementTree as ET
 
 from community import community_site, parse_community, robots_allowed
+from rejections import is_rejected
 from editorial import emergency_scope, excluded_topic
 from security import MAX_FEED_BYTES, MAX_INPUT_BYTES, resolve_public_url, safe_text, validate_https_resource_url, validate_public_url
 
@@ -536,10 +537,11 @@ def is_low_value_news(item: dict) -> bool:
     return False
 
 
-def build_candidates(items: list[dict], personalization: dict | None = None) -> list[dict]:
+def build_candidates(items: list[dict], personalization: dict | None = None, excluded_hashes: set[str] | None = None) -> list[dict]:
     now = datetime.now(timezone.utc)
     items = [item for item in items
-             if not is_low_value_news(item)
+             if not is_rejected(item, excluded_hashes or set())
+             and not is_low_value_news(item)
              and not excluded_topic(item)
              and emergency_scope(item) != "foreign_or_unknown"
              and (published := parse_date(item.get("published_at"))) is not None
@@ -769,6 +771,9 @@ def handle(request: dict) -> dict:
         stream = request.get("stream", "news")
         if not isinstance(stream, str) or stream not in {"news", "community"}:
             return {"ok": False, "op": op, "error": "지원하지 않는 수집 목록입니다."}
+        excluded_hashes = request.get("excluded_hashes", [])
+        if not isinstance(excluded_hashes, list) or len(excluded_hashes) > 2000 or not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) for value in excluded_hashes):
+            return {"ok": False, "op": op, "error": "제외 목록 형식이 올바르지 않습니다."}
         sources = request.get("sources", [])
         if not isinstance(sources, list) or len(sources) > 50:
             return {"ok": False, "op": op, "error": "소스 수가 허용 범위를 넘었습니다."}
@@ -788,7 +793,7 @@ def handle(request: dict) -> dict:
         personalization = request.get("personalization", {})
         if not isinstance(personalization, dict):
             personalization = {}
-        candidates = build_candidates(items, personalization)
+        candidates = build_candidates(items, personalization, set(excluded_hashes))
         for candidate in candidates:
             candidate["event_id"] = f"{stream}-{candidate['event_id']}"
         return {"ok": True, "op": op, "stream": stream, "candidates": candidates, "message": f"수집 {len(items)}건 → 후보 {len(candidates)}건", "errors": errors}
