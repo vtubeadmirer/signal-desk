@@ -40,6 +40,7 @@ export type Candidate = {
 };
 
 export type AgentResponse = {
+  errors?: string[];
   ok: boolean;
   op: string;
   error?: string;

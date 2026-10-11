@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sys
 import unittest
+from datetime import datetime, timezone
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -10,6 +12,23 @@ from security import validate_public_url, validate_https_resource_url
 
 
 class SignalDeskSecurityTests(unittest.TestCase):
+    def setUp(self):
+        clock = patch("agent.datetime", wraps=datetime)
+        mocked = clock.start()
+        mocked.now.return_value = datetime(2026, 10, 11, 12, tzinfo=timezone.utc)
+        self.addCleanup(clock.stop)
+
+    def test_only_recent_dated_news_is_selected(self):
+        base = {"title": "게임 업데이트 과금 정책 변경", "summary": "확률형 아이템 환불 규정 변경", "source_name": "Example", "tier": "professional"}
+        items = [{**base, "url": f"https://example.com/{i}", "published_at": date}
+                 for i, date in enumerate(["2026-10-11T10:00:00+00:00", "2026-10-08T10:00:00+00:00", "", "2026-10-12T10:00:00+00:00"])]
+        self.assertEqual([x["url"] for x in build_candidates(items)], ["https://example.com/0"])
+
+    def test_packaged_schema_uses_bundle_directory(self):
+        import agent
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "_MEIPASS", "bundle", create=True):
+            self.assertEqual(agent.analysis_schema_path(), Path("bundle/schemas/analysis.schema.json"))
+
     def test_rejects_private_urls(self):
         with self.assertRaises(ValueError):
             validate_public_url("https://127.0.0.1/feed.xml")
@@ -40,7 +59,7 @@ class SignalDeskSecurityTests(unittest.TestCase):
             "title": "피해자 신상과 주소가 퍼졌다는 글",
             "summary": "사생활 관련 내용",
             "url": "https://example.com/a",
-            "published_at": "2026-09-19T06:00:00+00:00",
+            "published_at": "2026-10-10T06:00:00+00:00",
             "source_name": "Example",
             "tier": "professional",
             "category": "사회·생활",
@@ -55,7 +74,7 @@ class SignalDeskSecurityTests(unittest.TestCase):
     def test_dedupes_same_story(self):
         base = {
             "summary": "게임 업데이트 내용",
-            "published_at": "2026-09-19T06:00:00+00:00",
+            "published_at": "2026-10-10T06:00:00+00:00",
             "tier": "professional",
             "category": "게임·인터넷 방송",
             "source_type": "media",

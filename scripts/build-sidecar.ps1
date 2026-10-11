@@ -11,6 +11,7 @@ New-Item -ItemType Directory -Force -Path $work | Out-Null
 
 python -m PyInstaller `
   --onefile `
+  --add-data "$(Join-Path $PSScriptRoot '..\schemas');schemas" `
   --name "signal-desk-agent-$target" `
   --distpath $dist `
   --workpath $work `

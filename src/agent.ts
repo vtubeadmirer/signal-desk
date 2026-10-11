@@ -1,75 +1,66 @@
 import { Command } from "@tauri-apps/plugin-shell";
 import type { AgentResponse, Source, Candidate, PersonalizationProfile } from "./types";
 
-let command: Command<string> | null = null;
-let child: Awaited<ReturnType<Command<string>["spawn"]>> | null = null;
-let buffer = "";
-let pending: Array<{ resolve: (value: AgentResponse) => void; reject: (reason: unknown) => void }> = [];
+type Child = Awaited<ReturnType<Command<string>["spawn"]>>;
+let starting: Promise<Child> | null = null;
+let nextId = 0;
+const pending = new Map<string, { resolve: (value: AgentResponse) => void; reject: (reason: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
 
-function startAgent() {
-  if (command) return command;
-  command = Command.sidecar("binaries/signal-desk-agent");
+function rejectAll(error: unknown) {
+  for (const waiter of pending.values()) {
+    clearTimeout(waiter.timer);
+    waiter.reject(error);
+  }
+  pending.clear();
+}
+
+function startAgent(): Promise<Child> {
+  if (starting) return starting;
+  const command = Command.sidecar("binaries/signal-desk-agent");
+  // The shell plugin emits one data event per stdout line, without its newline.
   command.stdout.on("data", (line) => {
-    buffer += String(line);
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
-    for (const raw of lines) {
-      if (!raw.trim()) continue;
-      try {
-        const parsed = JSON.parse(raw) as AgentResponse;
-        const waiter = pending.shift();
-        waiter?.resolve(parsed);
-      } catch (error) {
-        const waiter = pending.shift();
-        waiter?.reject(error);
-      }
+    try {
+      const response = JSON.parse(String(line)) as AgentResponse & { request_id?: string };
+      if (!response.request_id) return;
+      const waiter = pending.get(response.request_id);
+      if (!waiter) return;
+      pending.delete(response.request_id);
+      clearTimeout(waiter.timer);
+      waiter.resolve(response);
+    } catch {
+      rejectAll(new Error("Agent returned invalid JSON"));
     }
   });
-  command.stderr.on("data", (line) => {
-    console.error("[signal-desk-agent stderr]", String(line));
+  command.stderr.on("data", (line) => console.error("[signal-desk-agent]", String(line)));
+  command.on("error", (error) => rejectAll(new Error(String(error))));
+  command.on("close", () => {
+    starting = null;
+    rejectAll(new Error("뉴스 처리 프로세스가 종료되었습니다. 다시 시도해 주세요."));
   });
-  command.on("error", (error) => {
-    console.error("[signal-desk-agent error]", error);
+  starting = command.spawn().catch((error) => {
+    starting = null;
+    throw error;
   });
-  command.on("close", (event) => {
-    console.error("[signal-desk-agent close]", event);
-    command = null;
-    child = null;
-    const old = pending;
-    pending = [];
-    for (const item of old) {
-      item.reject(
-        new Error(
-          `Signal Desk agent closed (code=${event.code}, signal=${event.signal})`,
-        ),
-      );
-    }
-  });
-  return command;
+  return starting;
 }
 
 export async function callAgent(payload: Record<string, unknown>): Promise<AgentResponse> {
-  const cmd = startAgent();
-  const promise = new Promise<AgentResponse>((resolve, reject) => pending.push({ resolve, reject }));
-  if (!child) {
-    try {
-      child = await cmd.spawn();
-      console.error("[signal-desk-agent spawned]", child.pid);
-    } catch (error) {
-      console.error("[signal-desk-agent spawn error]", error);
-      pending.pop()?.reject(error);
-      throw error;
-    }
-  }
-  try {
-  await child.write(`${JSON.stringify(payload)}\n`);
-  console.error("[signal-desk-agent write] success");
-} catch (error) {
-  console.error("[signal-desk-agent write error]", error);
-  pending.pop()?.reject(error);
-  throw error;
-}
-return promise;
+  const child = await startAgent();
+  const requestId = String(++nextId);
+  return new Promise<AgentResponse>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(requestId);
+      reject(new Error("처리 시간이 초과되었습니다. 다시 시도해 주세요."));
+    }, payload.op === "collect" ? 900_000 : 180_000);
+    pending.set(requestId, { resolve, reject, timer });
+    void child.write(`${JSON.stringify({ ...payload, request_id: requestId })}\n`).catch((error) => {
+      const waiter = pending.get(requestId);
+      if (!waiter) return;
+      clearTimeout(waiter.timer);
+      pending.delete(requestId);
+      waiter.reject(error);
+    });
+  });
 }
 
 export async function health() {
@@ -78,11 +69,7 @@ export async function health() {
 
 export async function collect(
   sources: Source[],
-  personalization: PersonalizationProfile = {
-    keywords: [],
-    categories: [],
-    labels: [],
-  },
+  personalization: PersonalizationProfile = { keywords: [], categories: [], labels: [] },
 ) {
   return callAgent({ op: "collect", sources, personalization });
 }

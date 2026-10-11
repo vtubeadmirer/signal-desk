@@ -130,7 +130,7 @@ function loadSources(): Source[] {
 }
 
 function summaryPreview(value?: string | null): string {
-  const text = (value ?? "").replace(/\\s+/g, " ").trim();
+  const text = (value ?? "").replace(/\s+/g, " ").trim();
   if (!text) {
     return "요약이 제공되지 않은 기사입니다. 원문 링크에서 내용을 확인해 주세요.";
   }
@@ -356,7 +356,7 @@ export default function App() {
       });
       setShowMoreCandidates(false);
       setLastRun(new Date().toLocaleString("ko-KR"));
-      setStatus(`${r.candidates?.length ?? 0}개 후보를 만들었습니다.`);
+      setStatus(`${r.candidates?.length ?? 0}개 후보를 만들었습니다.${r.errors?.length ? ` 수집 실패: ${r.errors.join(" / ")}` : ""}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "수집 중 오류가 발생했습니다.");
     } finally {
@@ -377,6 +377,11 @@ export default function App() {
         ...item,
         ...(analyzedById.get(item.event_id) ?? {}),
       })));
+      const analyzedByUrl = new Map((r.candidates ?? []).map((item) => [articleId(item.url), item]));
+      setSavedArticles((current) => current.map((record) => {
+        const analyzed = analyzedByUrl.get(record.id);
+        return analyzed ? { ...record, candidate: analyzed, updatedAt: new Date().toISOString() } : record;
+      }));
       setStatus("AI 분석 완료");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "AI 분석 중 오류가 발생했습니다.");
@@ -553,6 +558,8 @@ export default function App() {
                     <ul>{item.discussion_points.slice(0, 3).map((point) => <li key={point}>{point}</li>)}</ul>
                   </div>
                 ) : null}
+                {item.confirmed_facts?.length ? <div className="discussion"><div className="label">제공된 자료에서 확인한 내용</div><ul>{item.confirmed_facts.map((fact, index) => <li key={index}>{fact}</li>)}</ul></div> : null}
+                {item.caveats?.length ? <div className="discussion"><div className="label">방송 전 확인할 주의사항</div><ul>{item.caveats.map((caveat, index) => <li key={index}>{caveat}</li>)}</ul></div> : null}
                 <div className="card-footer">
                   <span>{item.source_name}</span>
                   <button className="link" onClick={() => void openUrl(item.url)}>원문 보기 ↗</button>
