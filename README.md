@@ -83,3 +83,7 @@ The release workflow intentionally fails while placeholders or missing signing s
 Only articles with valid publication dates within the last 48 hours are shortlisted (five minutes of clock skew is accepted). Undated articles are excluded. Feed failures appear in the collection status. AI facts and caveats are shown for human review; AI results also update saved articles. The analysis schema is embedded in the Python executable.
 
 The analysis prompt alone does not enforce tool or filesystem isolation. Updater keys, repository endpoint, Windows signing secrets and release manifest generation still require configuration before production release.
+
+## Development Windows builds
+
+The build-windows workflow runs for main pushes, pull requests, and manual dispatches. It uses src-tauri/tauri.dev-build.conf.json to disable updater artifact signing for development installers. Installer and portable artifacts are uploaded only after successful build steps. The protected release workflow continues to require updater and Windows signing keys. Development packages are unsigned and should be downloaded manually from Actions; they are not updater releases.
