@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { candidateStream, sourceStream, streamCandidates, replaceStream, type SignalStream, type SavedStream } from "./streams";
 import { parseBackup, serializeBackup, writeStorageAtomically, sourceValid, type DeskBackup } from "./backup";
 import { readBackupFile, saveBackupFile } from "./backupFiles";
 import { analyze, collect, health } from "./agent";
@@ -153,7 +154,7 @@ function summaryPreview(value?: string | null): string {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<"today" | "prep" | "archive" | "settings">("today");
+  const [tab, setTab] = useState<"today" | "community" | "prep" | "archive" | "settings">("today");
   const [settingsSection, setSettingsSection] = useState<"sources" | "rules" | "security" | "backup">("sources");
   const [sources, setSources] = useState<Source[]>(loadSources);
   const [provider, setProvider] = useState(localStorage.getItem(PROVIDER_KEY) ?? "codex");
@@ -164,10 +165,20 @@ export default function App() {
   const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(() => localStorage.getItem(DATE_KEY) || localDateKey());
   const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
   const [archiveQuery, setArchiveQuery] = useState("");
-  const [filter, setFilter] = useState("전체");
-  const [showMoreCandidates, setShowMoreCandidates] = useState(false);
+  const stream: SignalStream = tab === "community" ? "community" : "news";
+  const streamLabel = stream === "news" ? "일반 뉴스" : "커뮤니티·밈";
+  const activeSources = sources.filter((source) => source.enabled && sourceStream(source) === stream);
+  const [filters, setFilters] = useState<Record<SignalStream, string>>({ news: "전체", community: "전체" });
+  const filter = filters[stream];
+  function setFilter(value: string) { setFilters((current) => ({ ...current, [stream]: value })); }
+  const [expanded, setExpanded] = useState<Record<SignalStream, boolean>>({ news: false, community: false });
+  const showMoreCandidates = expanded[stream];
+  function setShowMoreCandidates(value: boolean) { setExpanded((current) => ({ ...current, [stream]: value })); }
+  const [savedStream, setSavedStream] = useState<SavedStream>("all");
   const [running, setRunning] = useState(false);
-  const [lastRun, setLastRun] = useState<string>("");
+  const [lastRuns, setLastRuns] = useState<Record<SignalStream, string>>({ news: "", community: "" });
+  const lastRun = lastRuns[stream];
+  function setLastRun(value: string) { setLastRuns((current) => ({ ...current, [stream]: value })); }
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -230,14 +241,13 @@ export default function App() {
   }
 
   const filtered = useMemo(() => {
-    const list = filter === "전체" ? candidates : candidates.filter((x) => x.category === filter);
-    return [...list].sort((a, b) => b.score - a.score).slice(0, 20);
-  }, [candidates, filter]);
+    return streamCandidates(candidates, stream, filter);
+  }, [candidates, stream, filter]);
 
   const visibleCandidates = showMoreCandidates ? filtered : filtered.slice(0, 10);
 
   const personalization = useMemo<PersonalizationProfile>(() => {
-    const chosen = savedArticles.filter((record) =>
+    const chosen = savedArticles.filter((record) => candidateStream(record.candidate) === stream).filter((record) =>
       record.interested || record.broadcastDates.length > 0 || record.labels.length > 0
     );
     const keywords = new Set<string>();
@@ -261,12 +271,13 @@ export default function App() {
       categories: Array.from(categories).slice(0, 30),
       labels: Array.from(labels).slice(0, 50),
     };
-  }, [savedArticles]);
+  }, [savedArticles, stream]);
 
   const archiveRecords = useMemo(() => {
     const query = archiveQuery.trim().toLocaleLowerCase();
     return savedArticles
       .filter(isSavedArticle)
+      .filter((record) => savedStream === "all" || candidateStream(record.candidate) === savedStream)
       .filter((record) => {
         if (!query) return true;
         const text = [
@@ -280,7 +291,7 @@ export default function App() {
         return text.includes(query);
       })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }, [savedArticles, archiveQuery]);
+  }, [savedArticles, archiveQuery, savedStream]);
 
   function updateArticleRecord(
     item: Candidate,
@@ -366,12 +377,12 @@ export default function App() {
 
   async function runCollection() {
     setRunning(true);
-    setStatus("뉴스 수집 및 1차 압축 중…");
+    setStatus(`${streamLabel} 수집 및 후보 선별 중…`);
     try {
-      const r = await collect(sources.filter((s) => s.enabled), personalization);
+      const r = await collect(activeSources, personalization, stream);
       if (!r.ok) throw new Error(r.error ?? "수집 실패");
       const freshCandidates = r.candidates ?? [];
-      setCandidates(freshCandidates);
+      setCandidates((current) => replaceStream(current, freshCandidates, stream));
       setSavedArticles((current) => {
         const freshById = new Map(freshCandidates.map((item) => [articleId(item.url), item]));
         return current.map((record) => {
@@ -383,7 +394,7 @@ export default function App() {
       });
       setShowMoreCandidates(false);
       setLastRun(new Date().toLocaleString("ko-KR"));
-      setStatus(`${r.candidates?.length ?? 0}개 후보를 만들었습니다.${r.errors?.length ? ` 수집 실패: ${r.errors.join(" / ")}` : ""}`);
+      setStatus(`${streamLabel} 후보 ${r.candidates?.length ?? 0}개를 만들었습니다.${r.errors?.length ? ` 수집 실패: ${r.errors.join(" / ")}` : ""}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "수집 중 오류가 발생했습니다.");
     } finally {
@@ -393,14 +404,14 @@ export default function App() {
   }
 
   async function runAiAnalysis() {
-    if (!candidates.length) return;
+    if (!filtered.length) return;
     setRunning(true);
-    setStatus("상위 후보만 AI 분석 중…");
+    setStatus(`${streamLabel} 상위 후보만 AI 분석 중…`);
     try {
-      const r = await analyze(candidates.slice(0, 15), provider);
+      const r = await analyze(filtered.slice(0, 15), provider);
       if (!r.ok) throw new Error(r.error ?? "AI 분석 실패");
       const analyzedById = new Map((r.candidates ?? []).map((item) => [item.event_id, item]));
-      setCandidates(candidates.map((item) => ({
+      setCandidates((current) => current.map((item) => ({
         ...item,
         ...(analyzedById.get(item.event_id) ?? {}),
       })));
@@ -470,7 +481,10 @@ export default function App() {
       setProvider(pendingBackup.provider);
       setSelectedBroadcastDate(pendingBackup.selectedBroadcastDate);
       setCandidates([]);
-      setLastRun("");
+      setLastRuns({ news: "", community: "" });
+      setFilters({ news: "전체", community: "전체" });
+      setExpanded({ news: false, community: false });
+      setSavedStream("all");
       setArchiveQuery("");
       setFilter("전체");
       setPendingBackup(null);
@@ -494,7 +508,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <div className="brand">SIGNAL DESK <small>v0.2.0</small></div>
+          <div className="brand">SIGNAL DESK <small>v0.2.1</small></div>
           <div className="subtitle">오늘 방송에서 이야기할 만한 신호만 압축합니다.</div>
         </div>
         <div className="top-actions">
@@ -504,26 +518,27 @@ export default function App() {
       </header>
 
       <nav className="tabs">
-        <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>뉴스</button>
+        <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>일반 뉴스</button>
+        <button className={tab === "community" ? "active" : ""} onClick={() => setTab("community")}>커뮤니티·밈</button>
         <button className={tab === "prep" ? "active" : ""} onClick={() => setTab("prep")}>방송 준비</button>
         <button className={tab === "archive" ? "active" : ""} onClick={() => setTab("archive")}>보관함</button>
         <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>환경설정</button>
       </nav>
 
-      {tab === "today" && (
+      {(tab === "today" || tab === "community") && (
         <main className="content">
           <section className="hero-card">
             <div>
-              <span className="eyebrow">TODAY'S SIGNALS</span>
-              <h1>오늘 이야기하기 좋은 것</h1>
-              <p>뉴스와 커뮤니티 화제를 함께 선별합니다. 적합한 후보가 부족하면 개수를 억지로 채우지 않습니다.</p>
+              <span className="eyebrow">{stream === "news" ? "TODAY’S NEWS" : "COMMUNITY & MEMES"}</span>
+              <h1>{stream === "news" ? "오늘의 일반 뉴스" : "커뮤니티 소식과 밈"}</h1>
+              <p>{stream === "news" ? "언론·공식 소스에서 방송 후보를 최대 20개 선별합니다." : "커뮤니티 인기글에서 화제를 찾습니다. 제목과 인기 지표만 수집하므로 원문에서 맥락을 확인하세요."}</p>
             </div>
             <div className="hero-actions">
               <button className="secondary" onClick={() => { setTab("settings"); setSettingsSection("backup"); }}>백업·복원</button>
-              <button className="primary" disabled={running || sources.every((s) => !s.enabled)} onClick={runCollection}>
-                {running ? "처리 중…" : "뉴스 가져오기"}
+              <button className="primary" disabled={running || activeSources.length === 0} onClick={runCollection}>
+                {running ? "처리 중…" : stream === "news" ? "뉴스 가져오기" : "커뮤니티 소식 가져오기"}
               </button>
-              <button className="secondary" disabled={running || !candidates.length || !providerStatus?.authenticated} onClick={runAiAnalysis}>
+              <button className="secondary" disabled={running || !filtered.length || !providerStatus?.authenticated} onClick={runAiAnalysis}>
                 AI 분석
               </button>
             </div>
@@ -546,7 +561,7 @@ export default function App() {
 
           <section className="control-row">
             <div className="filters">
-              {CATEGORIES.map((category) => (
+              {CATEGORIES.filter((category) => stream === "community" || category !== "커뮤니티·밈").map((category) => (
                 <button key={category} className={filter === category ? "filter active" : "filter"} onClick={() => { setFilter(category); setShowMoreCandidates(false); }}>{category}</button>
               ))}
             </div>
@@ -556,8 +571,8 @@ export default function App() {
           <section className="signals-grid">
             {filtered.length === 0 ? (
               <div className="empty-card">
-                <strong>아직 후보가 없습니다.</strong>
-                <span>뉴스 소스에서 RSS/Atom 또는 커뮤니티 소스를 하나 이상 활성화한 뒤 「뉴스 가져오기」를 누르세요.</span>
+                <strong>{streamLabel} 후보가 없습니다.</strong>
+                <span>{stream === "news" ? "RSS/Atom 소스를 활성화한 뒤 「뉴스 가져오기」를 누르세요." : "커뮤니티 소스를 활성화한 뒤 「커뮤니티 소식 가져오기」를 누르세요."}</span>
               </div>
             ) : visibleCandidates.map((item) => (
               <article className="signal-card" key={item.event_id}>
@@ -648,7 +663,7 @@ export default function App() {
             <div className="candidate-expand">
               <button
                 className="secondary"
-                onClick={() => setShowMoreCandidates((current) => !current)}
+                onClick={() => setShowMoreCandidates(!showMoreCandidates)}
               >
                 {showMoreCandidates
                   ? "추가 후보 접기"
@@ -677,14 +692,18 @@ export default function App() {
               />
             </label>
           </section>
+          <div className="filters saved-stream-filter" aria-label="저장 자료 종류">
+            {(["all", "news", "community"] as const).map((value) => <button key={value} className={savedStream === value ? "filter active" : "filter"} aria-pressed={savedStream === value} onClick={() => setSavedStream(value)}>{value === "all" ? "전체" : value === "news" ? "일반 뉴스" : "커뮤니티·밈"}</button>)}
+          </div>
           <section className="saved-list">
             {savedArticles
-              .filter((record) => record.broadcastDates.includes(selectedBroadcastDate))
+              .filter((record) => record.broadcastDates.includes(selectedBroadcastDate) && (savedStream === "all" || candidateStream(record.candidate) === savedStream))
               .sort((a, b) => a.candidate.score < b.candidate.score ? 1 : -1)
               .map((record) => (
                 <article className="saved-card" key={record.id}>
                   <div className="signal-meta">
-                    <span className="badge">{record.candidate.category}</span>
+                    <span className="badge">{candidateStream(record.candidate) === "news" ? "일반 뉴스" : "커뮤니티·밈"}</span>
+                  <span className="badge">{record.candidate.category}</span>
                     <span className="decision candidate">점수 {record.candidate.score}</span>
                   </div>
                   <h2>{record.candidate.title}</h2>
@@ -727,7 +746,7 @@ export default function App() {
                   </div>
                 </article>
               ))}
-            {!savedArticles.some((record) => record.broadcastDates.includes(selectedBroadcastDate)) && (
+            {!savedArticles.some((record) => record.broadcastDates.includes(selectedBroadcastDate) && (savedStream === "all" || candidateStream(record.candidate) === savedStream)) && (
               <div className="empty-card">
                 <strong>이 날짜에 준비한 기사가 없습니다.</strong>
                 <span>뉴스 화면에서 방송 날짜를 선택한 뒤 「방송 준비에 담기」를 눌러 보세요.</span>
@@ -754,10 +773,14 @@ export default function App() {
               onChange={(event) => setArchiveQuery(event.target.value)}
             />
           </section>
+          <div className="filters saved-stream-filter" aria-label="저장 자료 종류">
+            {(["all", "news", "community"] as const).map((value) => <button key={value} className={savedStream === value ? "filter active" : "filter"} aria-pressed={savedStream === value} onClick={() => setSavedStream(value)}>{value === "all" ? "전체" : value === "news" ? "일반 뉴스" : "커뮤니티·밈"}</button>)}
+          </div>
           <section className="saved-list">
             {archiveRecords.map((record) => (
               <article className="saved-card" key={record.id}>
                 <div className="signal-meta">
+                  <span className="badge">{candidateStream(record.candidate) === "news" ? "일반 뉴스" : "커뮤니티·밈"}</span>
                   <span className="badge">{record.candidate.category}</span>
                   {record.interested && <span className="decision candidate">관심 뉴스</span>}
                 </div>
@@ -804,7 +827,7 @@ export default function App() {
             ))}
             {archiveRecords.length === 0 && (
               <div className="empty-card">
-                <strong>{archiveQuery.trim() ? "검색 결과가 없습니다." : "아직 저장된 기사가 없습니다."}</strong>
+                <strong>{archiveQuery.trim() ? "검색 결과가 없습니다." : "현재 조건에 맞는 저장 자료가 없습니다."}</strong>
                 <span>뉴스 화면에서 관심 뉴스, 방송 준비 또는 개인 분류를 이용해 기사를 저장하세요.</span>
                 {!archiveQuery.trim() && <button className="secondary" onClick={() => setTab("today")}>뉴스 보러 가기</button>}
               </div>

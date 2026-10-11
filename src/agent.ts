@@ -70,8 +70,9 @@ export async function health() {
 export async function collect(
   sources: Source[],
   personalization: PersonalizationProfile = { keywords: [], categories: [], labels: [] },
+  stream: "news" | "community" = "news",
 ) {
-  return callAgent({ op: "collect", sources, personalization });
+  return callAgent({ op: "collect", sources, personalization, stream });
 }
 
 export async function analyze(candidates: Candidate[], provider: string) {

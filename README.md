@@ -104,3 +104,7 @@ python -m unittest discover -s python/tests
 node --test tests/agent.test.cjs tests/backup.test.cjs
 npm run build
 ```
+
+## v0.2.1: independent news and community lists
+
+General news is the default tab; Community/Memes has its own tab. Each collection request fetches only that tab's source type and independently selects up to 20 candidates. Collecting one type preserves the other type's previous results, category filter, expanded state and collection timestamp. Saved interests personalize only the matching type. AI analysis receives up to 15 candidates from the current tab and category. Server-side source filtering and type-prefixed event IDs prevent mixing or AI update collisions. Broadcast Prep and Archive can show all saved items or filter by General News / Community/Memes. Backup format v1 remains compatible.

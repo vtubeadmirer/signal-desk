@@ -42,6 +42,7 @@ export type Candidate = {
 };
 
 export type AgentResponse = {
+  stream?: "news" | "community";
   errors?: string[];
   ok: boolean;
   op: string;

@@ -766,6 +766,9 @@ def handle(request: dict) -> dict:
     if op == "health":
         return {"ok": True, "op": op, "provider": provider_status(), "message": "Signal Desk agent ready"}
     if op == "collect":
+        stream = request.get("stream", "news")
+        if not isinstance(stream, str) or stream not in {"news", "community"}:
+            return {"ok": False, "op": op, "error": "지원하지 않는 수집 목록입니다."}
         sources = request.get("sources", [])
         if not isinstance(sources, list) or len(sources) > 50:
             return {"ok": False, "op": op, "error": "소스 수가 허용 범위를 넘었습니다."}
@@ -773,6 +776,9 @@ def handle(request: dict) -> dict:
         errors: list[str] = []
         for source in sources:
             if not isinstance(source, dict) or not source.get("enabled"):
+                continue
+            source_stream = "community" if source.get("kind") == "community" else "news"
+            if source_stream != stream:
                 continue
             try:
                 items.extend(fetch_source(source))
@@ -783,7 +789,9 @@ def handle(request: dict) -> dict:
         if not isinstance(personalization, dict):
             personalization = {}
         candidates = build_candidates(items, personalization)
-        return {"ok": True, "op": op, "candidates": candidates, "message": f"수집 {len(items)}건 → 후보 {len(candidates)}건", "errors": errors}
+        for candidate in candidates:
+            candidate["event_id"] = f"{stream}-{candidate['event_id']}"
+        return {"ok": True, "op": op, "stream": stream, "candidates": candidates, "message": f"수집 {len(items)}건 → 후보 {len(candidates)}건", "errors": errors}
     if op == "analyze":
         candidates = request.get("candidates", [])
         if not isinstance(candidates, list) or len(candidates) > 15:
