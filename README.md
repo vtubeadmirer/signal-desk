@@ -1,4 +1,4 @@
-# Signal Desk — Secure Desktop v0.2
+# Signal Desk — Secure Desktop v0.4
 
 Signal Desk is a local-first Windows desktop prototype for broadcast-news curation.
 
@@ -101,8 +101,9 @@ Verification commands:
 
 ```powershell
 python -m unittest discover -s python/tests
-node --test tests/agent.test.cjs tests/backup.test.cjs
+node --test tests/*.test.cjs
 npm run build
+python scripts/live_check.py   # optional: hits the real default feeds and community lists
 ```
 
 ## v0.2.1: independent news and community lists
@@ -128,3 +129,19 @@ A matching rule starts at 40 points and gains 10 points per additional rejection
 Settings → Excluded List shows learned topics/pairs, evidence counts and maximum penalties. Toggle learning, switch strength, search/filter rules, or mute individual rules. Undoing feedback removes its contribution; remaining feedback can still support the same rule. Rules are recalculated from the history after restart and bounded to 300 per stream so community feedback cannot crowd out news feedback.
 
 Returned candidates retain their pre-penalty score and penalty explanation; collection status reports suppressed and demoted counts. Frontend rescoring avoids double penalties and restores base scores when a rule is disabled. Candidate metadata and learning settings are backed up; old format-v1 backups remain valid. The dictionary is embedded in the sidecar and a packaged IPC smoke test exercises it in Windows CI.
+
+## v0.4.0: faster, isolated collection and maintenance hardening
+
+- Sources are fetched concurrently (up to eight at a time) with a 120-second overall budget. One slow feed no longer delays the rest; a feed that exceeds the budget is reported as skipped. In the live check the nine default news feeds now complete in about a second instead of running one after another.
+- The sidecar processes each request on its own worker thread, so a long collection no longer blocks the health check or AI analysis that follows it.
+- Duplicate clustering pre-computes title tokens and URL identity once per article instead of per comparison, and ignores tracking parameters such as `utm_*` and `fbclid` when deciding whether two links are the same story. Rejection fingerprints are unchanged, so existing exclusion lists and backups keep working.
+- Atom feeds now use the `rel="alternate"` link (or a link without `rel`) as the article URL; `self` and `enclosure` links are never mistaken for the story.
+- Feed failures report their actual reason (HTTP status, timeout, XML parse error, robots.txt restriction) instead of a generic message. No feed content or provider output is included.
+- Short headlines from `official` tier feeds are no longer dropped as low value when the feed provides no description.
+- `robots.txt` group matching requires the exact `SignalDesk` user-agent name; partial or empty agent names no longer claim the dedicated group.
+- If the Codex CLI rejects one of the options the app relies on, the analysis error now says the CLI needs updating rather than a generic failure.
+- The startup update check is skipped while `tauri.conf.json` still carries placeholder updater keys or endpoints.
+- The sidecar debug log rotates at 1 MB.
+- The React UI is split into `src/storage.ts` and `src/components/` (candidate card, prep, archive, settings panels, excluded list, update modal); `App.tsx` keeps state and handlers only. The header version comes from `package.json` at build time.
+- Every GitHub Action is pinned to a commit SHA. A new weekly `live-check` workflow collects from the real default feeds and community pages and fails when a community parser returns nothing or most RSS feeds stop responding, so site layout changes are noticed early.
+- Known remaining work: saved articles still live in WebView `localStorage`; moving them to a file-backed store is planned for a later release because it changes the on-disk data location.

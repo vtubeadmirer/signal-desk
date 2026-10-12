@@ -1,0 +1,29 @@
+name: live-check
+
+# Weekly smoke test against the real default feeds and community list pages.
+# Fails when a community parser returns nothing (site layout changed) or when
+# most RSS feeds stop responding, so breakage is noticed before users report it.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 22 * * 1"  # Tuesday 07:00 KST
+
+permissions:
+  contents: read
+
+jobs:
+  live-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Collect from live sources
+        run: python scripts/live_check.py

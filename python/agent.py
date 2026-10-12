@@ -10,9 +10,11 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import traceback
 import time
 import math
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
@@ -27,6 +29,10 @@ from editorial import emergency_scope, excluded_topic
 from security import MAX_FEED_BYTES, MAX_INPUT_BYTES, resolve_public_url, safe_text, validate_https_resource_url, validate_public_url
 
 
+MAX_LOG_BYTES = 1024 * 1024
+_log_lock = threading.Lock()
+
+
 def debug_log(message: str) -> None:
     """Write sidecar diagnostics to a per-user Windows log when possible."""
     try:
@@ -36,8 +42,13 @@ def debug_log(message: str) -> None:
             base = Path.home() / ".signal-desk"
         base.mkdir(parents=True, exist_ok=True)
         log_path = base / "agent-debug.log"
+        try:
+            if log_path.exists() and log_path.stat().st_size > MAX_LOG_BYTES:
+                log_path.replace(base / "agent-debug.log.1")
+        except OSError:
+            pass
         timestamp = datetime.now().astimezone().isoformat()
-        with log_path.open("a", encoding="utf-8") as handle:
+        with _log_lock, log_path.open("a", encoding="utf-8") as handle:
             handle.write(f"[{timestamp}] {message}\n")
             handle.flush()
     except Exception:
@@ -135,6 +146,31 @@ def find_content_text(node: ET.Element) -> str:
     return ""
 
 
+NON_ARTICLE_LINK_RELS = {"self", "enclosure", "edit", "hub", "replies", "license", "via", "payment"}
+
+
+def item_link(item: ET.Element, source: dict) -> str:
+    """Pick the article link: Atom rel="alternate" (or no rel) wins over self/enclosure links."""
+    preferred = ""
+    fallback = ""
+    for child in item.iter():
+        if child is item or local_name(child.tag) != "link":
+            continue
+        href = child.attrib.get("href")
+        text = safe_text("".join(child.itertext()), 2048)
+        candidate_link = (href or text or "").strip()
+        if not candidate_link:
+            continue
+        rel = child.attrib.get("rel", "alternate").strip().lower()
+        if rel == "alternate":
+            preferred = candidate_link
+            break
+        if rel not in NON_ARTICLE_LINK_RELS and not fallback:
+            fallback = candidate_link
+    chosen = preferred or fallback
+    return urljoin(source.get("url", ""), chosen) if chosen else ""
+
+
 def parse_feed(xml: bytes, source: dict) -> list[dict]:
     head = xml[:20000].upper()
     if b"<!DOCTYPE" in head or b"<!ENTITY" in head:
@@ -146,15 +182,7 @@ def parse_feed(xml: bytes, source: dict) -> list[dict]:
         if kind not in {"item", "entry"}:
             continue
         title = find_text(item, {"title"})
-        link = ""
-        for child in item.iter():
-            if local_name(child.tag) == "link":
-                href = child.attrib.get("href")
-                text = safe_text("".join(child.itertext()), 2048)
-                candidate_link = href or text
-                if candidate_link:
-                    link = urljoin(source.get("url", ""), candidate_link)
-                    break
+        link = item_link(item, source)
         published = find_text(item, {"pubdate", "published", "updated", "date", "issued", "modified"})
         description = find_content_text(item)
         if not title or not link:
@@ -228,19 +256,25 @@ def _fetch_pinned_https(url: str, host: str, ip_addresses: list[str]) -> bytes:
             last_error = exc
         finally:
             connection.close()
+    if isinstance(last_error, ValueError):
+        raise ValueError(str(last_error)) from last_error
+    if isinstance(last_error, socket.timeout):
+        raise ValueError("피드 서버 응답이 15초 안에 오지 않았습니다.") from last_error
     if last_error:
-        raise ValueError("피드 서버 연결에 실패했습니다.") from last_error
-    raise ValueError("피드 서버 연결에 실패했습니다.")
+        raise ValueError("피드 서버에 연결하지 못했습니다.") from last_error
+    raise ValueError("피드 서버에 연결하지 못했습니다.")
 
 
 _community_cache: dict[str, tuple[float, bytes, datetime]] = {}
+_community_cache_lock = threading.Lock()
 
 
 def fetch_source(source: dict) -> list[dict]:
     if source.get("kind") == "community":
         community_site(str(source.get("url", "")))
         url, host, addresses = resolve_public_url(source["url"])
-        cached = _community_cache.get(url)
+        with _community_cache_lock:
+            cached = _community_cache.get(url)
         if cached and time.monotonic() - cached[0] < 300:
             return parse_community(cached[1], source, cached[2])
         robots_url, robots_host, robots_addresses = resolve_public_url(f"https://{host}/robots.txt")
@@ -252,9 +286,10 @@ def fetch_source(source: dict) -> list[dict]:
         items = parse_community(data, source, fetched_at)
         if not items:
             raise ValueError("목록을 읽지 못했습니다. 접근 제한 또는 페이지 변경을 확인하세요.")
-        if len(_community_cache) >= 50:
-            _community_cache.pop(next(iter(_community_cache)))
-        _community_cache[url] = (time.monotonic(), data, fetched_at)
+        with _community_cache_lock:
+            if len(_community_cache) >= 50:
+                _community_cache.pop(next(iter(_community_cache)))
+            _community_cache[url] = (time.monotonic(), data, fetched_at)
         return items
 
     url, host, addresses = resolve_public_url(str(source.get("url", "")))
@@ -310,16 +345,17 @@ def cluster_tokens(title: str) -> set[str]:
     }
 
 
-def cluster_similarity(a: str, b: str) -> float:
-    aa, bb = cluster_tokens(a), cluster_tokens(b)
+def _token_similarity(aa: set[str], bb: set[str]) -> float:
     if not aa or not bb:
         return 0.0
-
     shared = aa & bb
     if len(shared) < 2:
         return 0.0
-
     return len(shared) / min(len(aa), len(bb))
+
+
+def cluster_similarity(a: str, b: str) -> float:
+    return _token_similarity(cluster_tokens(a), cluster_tokens(b))
 
 
 def classify(item: dict) -> tuple[str, list[str], int, str]:
@@ -532,7 +568,8 @@ def is_low_value_news(item: dict) -> bool:
     if title.startswith("[부고]") or title.startswith("부고"):
         return True
 
-    if item.get("source_type") != "community" and len(title) < 15 and len(summary) < 80:
+    # Official feeds often publish short headlines without a description; keep them.
+    if item.get("source_type") != "community" and item.get("tier") != "official" and len(title) < 15 and len(summary) < 80:
         return True
 
     return False
@@ -552,29 +589,31 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
     if negative_stats is not None:
         negative_stats.update(suppressed=sum(penalty >= 40 for _, penalty in assessed), demoted=0)
     items = [item for item, penalty in assessed if penalty < 40]
+    # Pre-compute per-item features once; the pairwise loop below is O(n^2).
+    features: dict[int, tuple[datetime, str, set[str]]] = {
+        id(item): (parse_date(item.get("published_at")) or now, normalize_url(item["url"]), cluster_tokens(item["title"]))
+        for item in items
+    }
     groups: list[list[dict]] = []
     for item in items:
-        dt = parse_date(item.get("published_at")) or now
-        url = item["url"]
-        item_tokens = cluster_tokens(item["title"])
+        dt, url_key, item_tokens = features[id(item)]
         matching_groups = []
 
         for group in groups:
             matched_group = False
 
             for existing in group:
-                existing_dt = parse_date(existing.get("published_at")) or now
-                same_url = normalize_url(url) == normalize_url(existing["url"])
+                existing_dt, existing_url_key, existing_tokens = features[id(existing)]
+                same_url = url_key == existing_url_key
                 near = abs((dt - existing_dt).total_seconds()) <= 48 * 3600
 
-                existing_tokens = cluster_tokens(existing["title"])
                 shared_tokens = item_tokens & existing_tokens
                 event_overlap = (
                     len(shared_tokens) >= 3
                     and bool(shared_tokens & EVENT_CLUSTER_TOKENS)
                 )
                 same_event = near and (
-                    cluster_similarity(item["title"], existing["title"]) >= 0.5
+                    _token_similarity(item_tokens, existing_tokens) >= 0.5
                     or event_overlap
                 )
 
@@ -612,11 +651,7 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
             primary, category, personalization
         )
 
-        # 일반 정치 뉴스는 개인화 점수로 다시 올라오지 않도록 최하위 점수를 적용합니다.
-        if political_rule == "political":
-            score = 0
-            personal_bonus = 0
-        elif political_rule == "emergency":
+        if political_rule == "emergency":
             # 국가적 비상사태는 일반 정치 뉴스와 구분해 우선순위를 높입니다.
             score = min(100, base_score + 25)
             personal_bonus = 0
@@ -632,10 +667,7 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
             continue
 
         text = f"{primary.get('title','')} {primary.get('summary','')}"
-        talkability = (
-            0 if political_rule == "political"
-            else min(100, 35 + len(frames) * 12 + score // 2)
-        )
+        talkability = min(100, 35 + len(frames) * 12 + score // 2)
         verification_cost = 75 if decision == "manual_review" else max(10, 55 - len(unique_sources) * 10)
         context_required = min(100, 30 + (15 if "정책" in text else 0) + (10 if len(primary.get("summary", "")) < 60 else 0))
         output.append({
@@ -649,13 +681,13 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
             "collection_method": primary.get("collection_method", "rss"),
             "usage_status": primary.get("usage_status", "review_required"),
             "score": score,
-            "score_raw": 0 if political_rule == "political" else raw,
+            "score_raw": raw,
             "score_before_negative": score_before_negative,
             "negative_penalty": dislike_penalty,
             "negative_matches": dislike_matches,
             "domestic_emergency": political_rule == "emergency",
             "personalization_bonus": personal_bonus,
-            "political_penalty": political_rule == "political",
+            "political_penalty": False,
             "talkability": talkability,
             "verification_cost": verification_cost,
             "source_ready": bool(primary.get("url")) and decision != "exclude",
@@ -680,8 +712,14 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
     return output[:20]
 
 
+TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref_src", "cmpid")
+
+
 def normalize_url(url: str) -> str:
-    return url.split("#", 1)[0].rstrip("/")
+    """Identity used only for duplicate clustering; rejection fingerprints use rejections.rejection_id."""
+    parsed = urlparse(url.split("#", 1)[0])
+    kept = [pair for pair in parsed.query.split("&") if pair and not pair.lower().startswith(TRACKING_PARAM_PREFIXES)]
+    return parsed._replace(query="&".join(kept)).geturl().rstrip("/")
 
 
 def _provider_env() -> dict[str, str]:
@@ -723,6 +761,12 @@ def provider_status() -> dict:
         }
     except (OSError, subprocess.SubprocessError):
         return {"name": "codex", "installed": False, "authenticated": False, "auth_hint": "공식 Codex CLI를 설치한 뒤 codex login을 실행하세요."}
+
+
+def _looks_like_cli_option_drift(stderr: str) -> bool:
+    """True when the provider CLI rejected a flag, which means our pinned options are out of date."""
+    lowered = stderr.lower()
+    return any(marker in lowered for marker in ("unexpected argument", "unrecognized", "unknown option", "unknown flag", "invalid value"))
 
 
 def analysis_schema_path() -> Path:
@@ -775,6 +819,8 @@ def ai_analyze(candidates: list[dict]) -> list[dict]:
             creationflags=_provider_creation_flags(),
         )
         if result.returncode != 0:
+            if _looks_like_cli_option_drift(result.stderr or ""):
+                raise RuntimeError("Codex CLI가 앱이 사용하는 옵션을 인식하지 못했습니다. Codex CLI를 최신 버전으로 업데이트한 뒤 다시 시도하세요.")
             raise RuntimeError("AI 분석이 실패했습니다. 자세한 인증정보나 provider 비밀값은 로그로 남기지 않습니다.")
         data = json.loads(output.read_text(encoding="utf-8"))
         updates = {x["event_id"]: x for x in data.get("items", [])}
@@ -783,6 +829,47 @@ def ai_analyze(candidates: list[dict]) -> list[dict]:
             extra = updates.get(item["event_id"], {})
             merged.append({**item, **extra, "caveats": list(dict.fromkeys(item.get("caveats", []) + extra.get("caveats", [])))})
         return merged
+
+
+COLLECT_WORKERS = 8
+COLLECT_BUDGET_SECONDS = 120
+
+
+def _fetch_error_reason(exc: BaseException) -> str:
+    if isinstance(exc, ValueError):
+        return str(exc) or "피드 수집 실패"
+    if isinstance(exc, ET.ParseError):
+        return "피드 XML을 해석하지 못했습니다."
+    if isinstance(exc, socket.timeout):
+        return "피드 서버 응답이 15초 안에 오지 않았습니다."
+    if isinstance(exc, (OSError, http.client.HTTPException)):
+        return "피드 서버에 연결하지 못했습니다."
+    return "피드 수집 실패"
+
+
+def collect_sources(sources: list[dict], budget: float = COLLECT_BUDGET_SECONDS) -> tuple[list[dict], list[str]]:
+    """Fetch every source concurrently so one slow feed cannot block the rest."""
+    items: list[dict] = []
+    errors: list[str] = []
+    if not sources:
+        return items, errors
+    labels = [safe_text(str(source.get("name", "source")), 100) for source in sources]
+    executor = ThreadPoolExecutor(max_workers=min(COLLECT_WORKERS, len(sources)), thread_name_prefix="fetch")
+    try:
+        futures = {executor.submit(fetch_source, source): index for index, source in enumerate(sources)}
+        _, pending = wait(futures, timeout=budget)
+        for future, index in futures.items():
+            if future in pending:
+                errors.append(f"{labels[index]}: 수집 시간이 초과되어 건너뛰었습니다.")
+                continue
+            try:
+                items.extend(future.result())
+            except Exception as exc:  # noqa: BLE001
+                debug_log(f"fetch failed for {labels[index]}: {type(exc).__name__}")
+                errors.append(f"{labels[index]}: {safe_text(_fetch_error_reason(exc), 200)}")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return items, errors
 
 
 def handle(request: dict) -> dict:
@@ -807,19 +894,12 @@ def handle(request: dict) -> dict:
         sources = request.get("sources", [])
         if not isinstance(sources, list) or len(sources) > 50:
             return {"ok": False, "op": op, "error": "소스 수가 허용 범위를 넘었습니다."}
-        items: list[dict] = []
-        errors: list[str] = []
-        for source in sources:
-            if not isinstance(source, dict) or not source.get("enabled"):
-                continue
-            source_stream = "community" if source.get("kind") == "community" else "news"
-            if source_stream != stream:
-                continue
-            try:
-                items.extend(fetch_source(source))
-            except Exception as exc:  # noqa: BLE001
-                reason = str(exc) if source.get("kind") == "community" and isinstance(exc, ValueError) else "피드 수집 실패"
-                errors.append(f"{safe_text(str(source.get('name','source')),100)}: {safe_text(reason, 200)}")
+        selected = [
+            source for source in sources
+            if isinstance(source, dict) and source.get("enabled")
+            and ("community" if source.get("kind") == "community" else "news") == stream
+        ]
+        items, errors = collect_sources(selected)
         personalization = request.get("personalization", {})
         if not isinstance(personalization, dict):
             personalization = {}
@@ -836,10 +916,13 @@ def handle(request: dict) -> dict:
             return {"ok": False, "op": op, "error": "현재 지원되는 provider는 codex뿐입니다."}
         try:
             merged = ai_analyze(candidates)
-            return {"ok": True, "op": op, "candidates": merged, "provider": provider_status()}
+            return {"ok": True, "op": op, "candidates": merged}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "op": op, "error": str(exc)}
     return {"ok": False, "op": str(op), "error": "알 수 없는 작업입니다."}
+
+
+REQUEST_WORKERS = 4
 
 
 def main() -> int:
@@ -854,23 +937,32 @@ def main() -> int:
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-    try:
-        for line in sys.stdin:
-            if not line.strip():
-                continue
-            debug_log(f"stdin line received: {len(line)} bytes")
-            request = None
-            try:
-                request = json.loads(line)
-                response = handle(request)
-                response["request_id"] = request.get("request_id")
-            except Exception as exc:
-                debug_log(f"request exception: {type(exc).__name__}: {exc}")
-                debug_log(traceback.format_exc())
-                response = {"ok": False, "op": "unknown", "error": "요청 처리 중 오류가 발생했습니다.",
-                            "request_id": request.get("request_id") if isinstance(request, dict) else None}
+    stdout_lock = threading.Lock()
+
+    def respond(line: str) -> None:
+        request = None
+        try:
+            request = json.loads(line)
+            response = handle(request)
+            response["request_id"] = request.get("request_id")
+        except Exception as exc:
+            debug_log(f"request exception: {type(exc).__name__}: {exc}")
+            debug_log(traceback.format_exc())
+            response = {"ok": False, "op": "unknown", "error": "요청 처리 중 오류가 발생했습니다.",
+                        "request_id": request.get("request_id") if isinstance(request, dict) else None}
+        with stdout_lock:
             sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
             sys.stdout.flush()
+
+    try:
+        # Requests are independent; running them on worker threads keeps health
+        # checks and analysis responsive while a long collection is in flight.
+        with ThreadPoolExecutor(max_workers=REQUEST_WORKERS, thread_name_prefix="request") as pool:
+            for line in sys.stdin:
+                if not line.strip():
+                    continue
+                debug_log(f"stdin line received: {len(line)} bytes")
+                pool.submit(respond, line)
         debug_log("stdin reached EOF; exiting normally")
         return 0
     except BaseException as exc:

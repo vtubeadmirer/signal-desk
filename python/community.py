@@ -79,7 +79,7 @@ def robots_allowed(robots: str, url: str) -> bool:
             agents.append(value.lower())
         elif key in {"allow", "disallow"} and value:
             rules.append((key, value))
-    exact = [r for a, r in groups if any(x != "*" and x in "signaldesk" for x in a)]
+    exact = [r for a, r in groups if any(x == "signaldesk" for x in a)]
     selected = exact or [r for a, r in groups if "*" in a]
     parsed = urlparse(url)
     target = parsed.path + ("?" + parsed.query if parsed.query else "")

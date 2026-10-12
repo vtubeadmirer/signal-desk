@@ -1,4 +1,11 @@
+"""Live collection smoke test against the default news feeds and community lists.
+
+Run manually or from the scheduled live-check workflow. Exits non-zero when a
+community parser returns nothing (page layout probably changed) or when more
+than half of the RSS feeds fail, so breakage is noticed before users hit it.
+"""
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -6,7 +13,10 @@ sys.path.insert(0, str(ROOT / "python"))
 
 import agent
 
-sources = [
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows consoles default to a legacy code page
+
+NEWS_SOURCES = [
     {"name": "전자신문 IT", "url": "https://rss.etnews.com/03.xml", "tier": "professional", "category": "IT·플랫폼", "enabled": True},
     {"name": "연합뉴스", "url": "https://www.yna.co.kr/rss/news.xml", "tier": "professional", "category": "사회·생활", "enabled": True},
     {"name": "경향신문", "url": "https://www.khan.co.kr/rss/rssdata/total_news.xml", "tier": "professional", "category": "사회·생활", "enabled": True},
@@ -18,45 +28,49 @@ sources = [
     {"name": "SBS", "url": "https://news.sbs.co.kr/news/SectionRssFeed.do?section=01", "tier": "professional", "category": "사회·생활", "enabled": True},
 ]
 
-items = []
-errors = []
-
-for source in sources:
-    try:
-        fetched = agent.fetch_source(source)
-        items.extend(fetched)
-        print(f"[성공] {source['name']}: {len(fetched)}건")
-    except Exception as exc:
-        errors.append(source["name"])
-        print(f"[실패] {source['name']}: {type(exc).__name__}: {exc!r}")
-
-candidates = agent.build_candidates(items)
-
-print(f"\n총 수집: {len(items)}건")
-print(f"후보 기사: {len(candidates)}건")
-print(f"실패한 피드: {', '.join(errors) if errors else '없음'}")
-print("\n=== 상위 후보 20건 ===")
-
-for i, item in enumerate(candidates[:20], 1):
-    title = item.get("title", "(제목 없음)")
-    score = item.get("score", item.get("priority", "?"))
-    category = item.get("category", "?")
-    source_name = item.get("source_name", "?")
-    source_count = item.get("source_count", 1)
-    print(
-        f"{i:02}. [{score}] [{category}] {title} "
-        f"| 대표 출처: {source_name} | 출처 수: {source_count}"
-    )
-
-print("\n=== 페이커 우표 중복 확인 ===")
-faker_items = [
-    item for item in candidates
-    if "페이커" in item.get("title", "")
-    and "우표" in item.get("title", "")
+COMMUNITY_SOURCES = [
+    {"name": "디시 버츄얼 스트리머 개념글", "url": "https://gall.dcinside.com/mini/board/lists/?id=virtual_streamer&exception_mode=recommend", "kind": "community", "tier": "approved_feed", "category": "버튜버·크리에이터", "enabled": True},
+    {"name": "디시 치지직 개념글", "url": "https://gall.dcinside.com/mgallery/board/lists/?id=chzzk&exception_mode=recommend", "kind": "community", "tier": "approved_feed", "category": "IT·플랫폼", "enabled": True},
+    {"name": "루리웹 유머 베스트", "url": "https://bbs.ruliweb.com/best/humor", "kind": "community", "tier": "approved_feed", "category": "커뮤니티·밈", "enabled": True},
+    {"name": "펨코 포텐 화제순", "url": "https://www.fmkorea.com/best2", "kind": "community", "tier": "approved_feed", "category": "커뮤니티·밈", "enabled": True},
 ]
-print(f"관련 후보 수: {len(faker_items)}")
-for item in faker_items:
-    print(
-        f"- {item.get('title', '?')} "
-        f"| 출처 수: {item.get('source_count', 1)}"
-    )
+
+
+def run(label: str, sources: list[dict]) -> tuple[list[dict], list[str]]:
+    started = time.monotonic()
+    items, errors = agent.collect_sources(sources)
+    per_source = {}
+    for item in items:
+        per_source[item["source_name"]] = per_source.get(item["source_name"], 0) + 1
+    print(f"=== {label} ({time.monotonic() - started:.1f}s) ===")
+    for source in sources:
+        count = per_source.get(source["name"], 0)
+        print(f"[{'성공' if count else '실패'}] {source['name']}: {count}건")
+    for error in errors:
+        print(f"  ! {error}")
+    return items, errors
+
+
+news_items, news_errors = run("일반 뉴스", NEWS_SOURCES)
+community_items, community_errors = run("커뮤니티", COMMUNITY_SOURCES)
+
+candidates = agent.build_candidates(news_items)
+print(f"\n총 수집: 뉴스 {len(news_items)}건 · 커뮤니티 {len(community_items)}건")
+print(f"뉴스 후보: {len(candidates)}건")
+print("\n=== 상위 뉴스 후보 ===")
+for i, item in enumerate(candidates[:20], 1):
+    print(f"{i:02}. [{item['score']}] [{item['category']}] {item['title']} | {item['source_name']} | 출처 {item['source_count']}")
+
+failures = []
+if len(news_errors) * 2 > len(NEWS_SOURCES):
+    failures.append(f"RSS 피드 {len(news_errors)}/{len(NEWS_SOURCES)}개가 실패했습니다.")
+broken_communities = [s["name"] for s in COMMUNITY_SOURCES if not any(i["source_name"] == s["name"] for i in community_items)]
+if broken_communities:
+    failures.append("커뮤니티 목록을 읽지 못했습니다 (페이지 구조 변경 가능): " + ", ".join(broken_communities))
+
+if failures:
+    print("\nLIVE CHECK FAILED")
+    for failure in failures:
+        print(" - " + failure)
+    sys.exit(1)
+print("\nLIVE CHECK PASSED")
