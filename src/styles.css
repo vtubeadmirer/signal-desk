@@ -238,3 +238,5 @@
 .youtube-add input{flex:1;height:38px;background:#0d1014;border:1px solid #2a3038;border-radius:8px;color:#dbe0e7;padding:0 9px}
 .youtube-add select{height:38px;background:#0d1014;border:1px solid #2a3038;border-radius:8px;color:#dbe0e7;padding:0 9px}
 .inline-status{color:#8f98a7;font-size:12px;margin-top:8px}
+.badge.watch{color:#ffd37a;background:#2b2412;border:1px solid #4a3d1a}
+.badge.aired{color:#9ec5ff;background:#121c2b;border:1px solid #1f3350}

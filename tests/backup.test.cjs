@@ -6,7 +6,9 @@ const ts = require('typescript');
 const rejectionApi = {};
 vm.runInNewContext(ts.transpileModule(fs.readFileSync("src/rejections.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rejectionApi,URL,Date,Set,Map});
 const exportsObject = {};
-vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/backup.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:exportsObject,require:()=>rejectionApi,TextEncoder,URL,Date,Set,JSON});
+const watchlistApi = {};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync("src/watchlist.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:watchlistApi,String,Array});
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/backup.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:exportsObject,require:(name)=>name==='./watchlist'?watchlistApi:rejectionApi,TextEncoder,URL,Date,Set,JSON});
 const api=exportsObject;
 function data() {
  const candidate={priority:1,slide_order:1,score:70,score_raw:12,talkability:80,verification_cost:40,context_required:30,source_count:1,category:'커뮤니티·밈',event_id:'event-1',title:'게임 밈',summary:'원문 확인',source_name:'루리웹',published_at:'2026-10-12T00:00:00Z',url:'https://bbs.ruliweb.com/best/board/1/read/2',keywords:['게임'],frames:['게임 경험'],source_ready:true,decision:'manual_review',content_type:'community',source_type:'community',collection_method:'public_list',usage_status:'review_required',confirmed_facts:['자료에 있는 내용'],caveats:['원문 확인'],discussion_points:['어떤 점이 재미있는가'],why_now:'최근 화제'};
@@ -53,5 +55,14 @@ test('backup preserves learning switches and muted rule IDs',()=>{
 
 test('invalid learned-score metadata is rejected on import',()=>{
  const original=data();original.articles[0].candidate.negative_penalty='80';
+ assert.throws(()=>api.serializeBackup(original));
+});
+
+test('backup carries the watchlist and rejects malformed lists',()=>{
+ const original=data();original.watchlist=['페이커','치지직'];
+ assert.deepEqual(api.parseBackup(api.serializeBackup(original)).watchlist,original.watchlist);
+ delete original.watchlist;
+ assert.equal(api.parseBackup(api.serializeBackup(original)).watchlist,undefined);
+ original.watchlist=['x'];
  assert.throws(()=>api.serializeBackup(original));
 });

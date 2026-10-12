@@ -29,6 +29,7 @@
     "fs:allow-mkdir",
     "fs:allow-rename",
     "fs:allow-remove",
+    "fs:allow-read-dir",
     "fs:allow-applocaldata-read-recursive",
     "fs:allow-applocaldata-write-recursive",
     "fs:allow-applocaldata-meta-recursive"

@@ -1,6 +1,7 @@
 import { sourceValid } from "./backup";
 import { DEFAULT_LEARNING, learningValid, rejectionValid, MAX_REJECTIONS, type LearningSettings, type RejectedItem } from "./rejections";
 import { ARTICLES_KEY, COMMUNITY_MIGRATION_KEY, DATE_KEY, DEFAULT_SOURCES, LEARNING_KEY, PROVIDER_KEY, REJECTIONS_KEY, STORAGE_KEY, localDateKey } from "./storage";
+import { watchlistValid } from "./watchlist";
 import type { ArticleRecord, Source } from "./types";
 
 /** Everything Signal Desk persists between launches, as one document. */
@@ -14,6 +15,8 @@ export type DeskState = {
   selectedBroadcastDate: string;
   /** Community presets were offered once to users who predate them. */
   communityPresetsApplied: boolean;
+  /** Terms always pinned to the top of the candidate list. */
+  watchlist: string[];
 };
 
 export const MAX_ARTICLES = 5000;
@@ -36,6 +39,7 @@ export function defaultState(): DeskState {
     rejectionLearning: DEFAULT_LEARNING,
     selectedBroadcastDate: localDateKey(),
     communityPresetsApplied: true,
+    watchlist: [],
   };
 }
 
@@ -55,6 +59,7 @@ export function sanitizeState(value: unknown): DeskState {
     rejectionLearning: learningValid(value.rejectionLearning) ? value.rejectionLearning : DEFAULT_LEARNING,
     selectedBroadcastDate: typeof value.selectedBroadcastDate === "string" && DATE.test(value.selectedBroadcastDate) ? value.selectedBroadcastDate : base.selectedBroadcastDate,
     communityPresetsApplied: typeof value.communityPresetsApplied === "boolean" ? value.communityPresetsApplied : true,
+    watchlist: watchlistValid(value.watchlist) ? value.watchlist : [],
   };
 }
 

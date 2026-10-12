@@ -6,7 +6,9 @@ const ts = require('typescript');
 const { execFileSync } = require('node:child_process');
 const streams={};
 const transpile=path=>ts.transpileModule(fs.readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
-vm.runInNewContext(transpile('src/streams.ts'),{exports:streams});
+const watchlist={};
+vm.runInNewContext(transpile('src/watchlist.ts'),{exports:watchlist,String,Array});
+vm.runInNewContext(transpile('src/streams.ts'),{exports:streams,require:()=>watchlist,Number});
 const api={};
 vm.runInNewContext(transpile('src/negativePreferences.ts'),{exports:api,require:name=>name.includes('negative_topics')?JSON.parse(fs.readFileSync('shared/negative_topics.json','utf8')):streams});
 function rejection(title,stream='community',i=1){return {id:'https://example.com/'+i,url:'https://example.com/'+i,title,stream,source_name:'Example',rejectedAt:'2026-10-12T00:00:00Z'};}

@@ -60,17 +60,19 @@ jobs:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           WINDOWS_CERTIFICATE_TIMESTAMP_URL: ${{ secrets.WINDOWS_CERTIFICATE_TIMESTAMP_URL }}
         run: |
-          $required = @(
-            @{n='TAURI_SIGNING_PRIVATE_KEY'; v=$env:TAURI_SIGNING_PRIVATE_KEY},
-            @{n='WINDOWS_CERTIFICATE'; v=$env:WINDOWS_CERTIFICATE_BASE64},
-            @{n='WINDOWS_CERTIFICATE_PASSWORD'; v=$env:WINDOWS_CERTIFICATE_PASSWORD},
-            @{n='WINDOWS_CERTIFICATE_TIMESTAMP_URL'; v=$env:WINDOWS_CERTIFICATE_TIMESTAMP_URL}
-          )
-          foreach ($item in $required) {
-            if ([string]::IsNullOrWhiteSpace($item.v)) {
-              throw "Missing required release secret: $($item.n)"
-            }
+          # The updater signing key is mandatory: without it the app cannot verify updates.
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw "Missing required release secret: TAURI_SIGNING_PRIVATE_KEY"
           }
+          # Windows Authenticode signing is optional until a certificate is purchased. Without it
+          # SmartScreen warns on first run, but updates are still verified by the updater signature.
+          $certParts = @($env:WINDOWS_CERTIFICATE_BASE64, $env:WINDOWS_CERTIFICATE_PASSWORD, $env:WINDOWS_CERTIFICATE_TIMESTAMP_URL)
+          $provided = @($certParts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+          if ($provided -gt 0 -and $provided -lt 3) {
+            throw "WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD and WINDOWS_CERTIFICATE_TIMESTAMP_URL must be set together."
+          }
+          if ($provided -eq 0) { Write-Warning "No Windows code-signing certificate configured; the installer will be unsigned." }
+          "WINDOWS_SIGNING=$([int]($provided -eq 3))" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           if ((Get-Content src-tauri/tauri.conf.json -Raw) -match 'REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY') {
             throw 'Updater public key is still a placeholder. Refusing release.'
           }
@@ -79,6 +81,7 @@ jobs:
           }
 
       - name: Import Windows signing certificate
+        if: env.WINDOWS_SIGNING == '1'
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}

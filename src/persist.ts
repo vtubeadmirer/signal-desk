@@ -1,4 +1,4 @@
-import { BaseDirectory, exists, mkdir, readTextFile, rename, writeTextFile } from "@tauri-apps/plugin-fs";
+import { BaseDirectory, exists, mkdir, readDir, readTextFile, remove, rename, writeTextFile } from "@tauri-apps/plugin-fs";
 import { migrateLegacyStorage, sanitizeState, serializeState, type DeskState } from "./state";
 
 /**
@@ -9,8 +9,10 @@ import { migrateLegacyStorage, sanitizeState, serializeState, type DeskState } f
 const DIR = "signal-desk";
 const FILE = `${DIR}/state.json`;
 const TMP = `${DIR}/state.json.tmp`;
+const SNAPSHOT_DIR = `${DIR}/snapshots`;
 const LOCAL_KEY = "signal-desk:state:v1";
 const fsOptions = { baseDir: BaseDirectory.AppLocalData };
+export const SNAPSHOTS_TO_KEEP = 7;
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -64,4 +66,35 @@ export function saveState(state: DeskState, onError: (error: unknown) => void, d
     if (!snapshot) return;
     chain = chain.then(() => flushState(snapshot)).catch(onError);
   }, delayMs);
+}
+
+/** Names of the snapshots that would be deleted to keep only the newest `keep`; pure for testing. */
+export function snapshotsToPrune(names: string[], keep = SNAPSHOTS_TO_KEEP): string[] {
+  const dated = names.filter((name) => /^state-\d{4}-\d{2}-\d{2}(-migration)?\.json$/.test(name)).sort();
+  // Migration snapshots are kept as long as they are not the oldest dated ones beyond the limit.
+  return dated.slice(0, Math.max(0, dated.length - keep));
+}
+
+/**
+ * Keep a dated copy of the state: one per day on first save, plus a tagged
+ * copy right after a migration. Old copies are pruned to SNAPSHOTS_TO_KEEP.
+ * Snapshot failures are logged, never surfaced; they must not block normal use.
+ */
+export async function writeSnapshot(state: DeskState, today: string, tag?: string): Promise<boolean> {
+  if (!inTauri) return false;
+  const name = `state-${today}${tag ? `-${tag}` : ""}.json`;
+  const path = `${SNAPSHOT_DIR}/${name}`;
+  try {
+    await mkdir(SNAPSHOT_DIR, { ...fsOptions, recursive: true });
+    if (await exists(path, fsOptions)) return false;
+    await writeTextFile(path, serializeState(state), fsOptions);
+    const entries = await readDir(SNAPSHOT_DIR, fsOptions);
+    for (const stale of snapshotsToPrune(entries.filter((entry) => entry.isFile).map((entry) => entry.name))) {
+      await remove(`${SNAPSHOT_DIR}/${stale}`, fsOptions);
+    }
+    return true;
+  } catch (error) {
+    console.warn("[signal-desk] snapshot failed", error);
+    return false;
+  }
 }

@@ -33,15 +33,12 @@ The repository includes two workflows:
 - `build-windows.yml`: test/build workflow for development.
 - `release-windows.yml`: protected release workflow intended for signed releases.
 
-Before production:
+Release signing status:
 
-1. Generate a Tauri updater signing key pair.
-2. Put only the public key in `tauri.conf.json`.
-3. Put the private key in a protected GitHub Environment secret.
-4. Configure a Windows code-signing certificate in the same protected environment.
-5. Replace the GitHub release endpoint placeholders.
-6. Protect the release environment and release tag pattern.
-7. Verify published artifacts and attestations before announcing the release.
+1. The Tauri updater public key is committed in `tauri.conf.json` and the endpoint points at this repository's latest release. The matching private key is **not** in the repository; it must be stored as the `TAURI_SIGNING_PRIVATE_KEY` secret of the protected `release` GitHub Environment (plus `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key has one). The release workflow refuses to run without it.
+2. Windows Authenticode signing (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`, `WINDOWS_CERTIFICATE_TIMESTAMP_URL`) is optional until a certificate is purchased. Without it SmartScreen warns on first install, but every update is still verified against the updater public key before installation, so update integrity does not depend on the certificate. Setting one or two of the three secrets fails the workflow on purpose.
+3. If the updater private key is ever lost or leaked, generate a new pair, replace the public key, and ship that change through a manually distributed build; existing installs cannot verify updates signed with a different key.
+4. Protect the release environment and the `v*` tag pattern, and verify published artifacts and attestations before announcing a release.
 
 ## Known limitation of v0.1
 
@@ -53,7 +50,7 @@ The Python sidecar handles each stdin request on its own worker thread (bounded 
 
 ## Local data file
 
-Since v0.5 the app's own data (sources, saved articles, notes, exclusions, learning settings) lives in one JSON document at `%LOCALAPPDATA%\com.signaldesk.desktop\signal-desk\state.json`, written atomically (temp file + rename). The filesystem capability is widened only to the app's own local-data directory (`fs:allow-applocaldata-*`); reads and writes elsewhere still require a path the user picked in a native dialog. The file contains no provider credentials. The pre-0.5 WebView `localStorage` layout is read once on first launch and migrated.
+Since v0.5 the app's own data (sources, saved articles, notes, exclusions, learning settings) lives in one JSON document at `%LOCALAPPDATA%\com.signaldesk.desktop\signal-desk\state.json`, written atomically (temp file + rename). The filesystem capability is widened only to the app's own local-data directory (`fs:allow-applocaldata-*`); reads and writes elsewhere still require a path the user picked in a native dialog. The file contains no provider credentials. The pre-0.5 WebView `localStorage` layout is read once on first launch and migrated. Dated safety copies are kept in `signal-desk\snapshots\` (one per day on launch plus a tagged copy right after a migration; the newest seven are kept).
 
 ## Community and backup boundaries
 

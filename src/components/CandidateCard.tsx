@@ -1,14 +1,19 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { summaryPreview } from "../storage";
+import type { PriorBroadcast } from "../history";
 import type { ArticleRecord, Candidate } from "../types";
 
-export function CandidateCard({ item, record, running, checked, focused, selectedBroadcastDate, labelDraft, onToggleChecked, onReject, onToggleInterest, onToggleBroadcastDate, onLabelDraftChange, onAddLabel, onRemoveLabel }: {
+export function CandidateCard({ item, record, running, checked, focused, watchHits, priorBroadcast, selectedBroadcastDate, labelDraft, onToggleChecked, onReject, onToggleInterest, onToggleBroadcastDate, onLabelDraftChange, onAddLabel, onRemoveLabel }: {
   item: Candidate;
   record: ArticleRecord | undefined;
   running: boolean;
   checked: boolean;
   /** Keyboard cursor (J/K) is on this card. */
   focused: boolean;
+  /** Watchlist terms found in the title or summary. */
+  watchHits: string[];
+  /** A saved story that already went on air and looks like this one. */
+  priorBroadcast: PriorBroadcast | null;
   selectedBroadcastDate: string;
   labelDraft: string;
   onToggleChecked: () => void;
@@ -27,6 +32,8 @@ export function CandidateCard({ item, record, running, checked, focused, selecte
       <div className="signal-meta">
         <span className="badge">{item.category}</span>
         {item.source_type === "community" && <span className="badge">커뮤니티 화제 · 원문 확인 필요</span>}
+        {watchHits.length > 0 && <span className="badge watch" title={watchHits.join(", ")}>워치리스트 · {watchHits[0]}{watchHits.length > 1 ? ` 외 ${watchHits.length - 1}` : ""}</span>}
+        {priorBroadcast && <span className="badge aired" title={`${priorBroadcast.reason === "url" ? "같은 링크" : priorBroadcast.reason === "title" ? "같은 제목" : "비슷한 주제"}: ${priorBroadcast.title}`}>이미 방송 {priorBroadcast.date.slice(5).replace("-", "/")}</span>}
         <span className={`decision ${item.decision}`}>{item.decision === "candidate" ? "검토 후보" : item.decision === "manual_review" ? "추가 확인" : "제외"}</span>
       </div>
       <h2>{item.title}</h2>

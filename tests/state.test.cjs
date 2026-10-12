@@ -12,10 +12,11 @@ function load(file, deps, extraGlobals = {}) {
   return exportsObject;
 }
 const rejections = load('src/rejections.ts', {});
-const backup = load('src/backup.ts', { './rejections': rejections });
+const watchlist = load('src/watchlist.ts', {});
+const backup = load('src/backup.ts', { './rejections': rejections, './watchlist': watchlist });
 const storage = load('src/storage.ts', { './rejections': rejections, './backup': backup }, { localStorage: { getItem: () => null } });
-const state = load('src/state.ts', { './rejections': rejections, './backup': backup, './storage': storage });
-const streams = load('src/streams.ts', {});
+const state = load('src/state.ts', { './rejections': rejections, './backup': backup, './storage': storage, './watchlist': watchlist });
+const streams = load('src/streams.ts', { './watchlist': watchlist });
 const cuesheet = load('src/cuesheet.ts', { './streams': streams });
 const youtube = load('src/youtube.ts', {});
 
@@ -27,12 +28,15 @@ test('sanitizeState falls back per field and drops only invalid rows', () => {
   const good = { id: 'https://example.com/a', candidate: candidate(), interested: true, labels: [], note: '', broadcastDates: ['2026-10-13'], savedAt: 'x', updatedAt: 'y' };
   const out = state.sanitizeState({ sources: 'nope', articles: [good, { broken: true }], rejectedItems: [{ id: 'bad' }], rejectionLearning: { enabled: 'yes' }, selectedBroadcastDate: '13/10/2026', provider: 'other' });
   assert.equal(out.sources.length, storage.DEFAULT_SOURCES.length);
-  assert.deepEqual(out.articles, [good]);
-  assert.deepEqual(out.rejectedItems, []);
-  assert.deepEqual(out.rejectionLearning, rejections.DEFAULT_LEARNING);
+  assert.equal(JSON.stringify(out.articles), JSON.stringify([good]));
+  assert.equal(out.rejectedItems.length, 0);
+  assert.equal(JSON.stringify(out.rejectionLearning), JSON.stringify(rejections.DEFAULT_LEARNING));
   assert.match(out.selectedBroadcastDate, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(out.provider, 'codex');
   assert.equal(out.version, 1);
+  assert.equal(out.watchlist.length, 0);
+  assert.equal(state.sanitizeState({ watchlist: ['페이커', 'bad  spacing'] }).watchlist.length, 0, 'an invalid list falls back as a whole');
+  assert.equal(JSON.stringify(state.sanitizeState({ watchlist: ['페이커'] }).watchlist), JSON.stringify(['페이커']));
 });
 
 test('legacy localStorage layout migrates into one document and is detected only when present', () => {

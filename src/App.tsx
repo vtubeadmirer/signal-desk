@@ -8,7 +8,10 @@ import { parseBackup, serializeBackup, type DeskBackup } from "./backup";
 import { readBackupFile, saveBackupFile } from "./backupFiles";
 import { analyze, cancelCollection, collect, health } from "./agent";
 import { CATEGORIES, COMMUNITY_SOURCES, articleId, isSavedArticle } from "./storage";
-import { flushState, saveState } from "./persist";
+import { flushState, saveState, writeSnapshot } from "./persist";
+import { findPriorBroadcast } from "./history";
+import { watchMatches } from "./watchlist";
+import { localDateKey } from "./storage";
 import type { DeskState } from "./state";
 import type { ArticleRecord, Candidate, PersonalizationProfile, Source } from "./types";
 import { ArchiveTab } from "./components/ArchiveTab";
@@ -41,6 +44,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   const [excludedQuery, setExcludedQuery] = useState("");
   const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(initial.selectedBroadcastDate);
   const [communityPresetsApplied, setCommunityPresetsApplied] = useState(initial.communityPresetsApplied);
+  const [watchlist, setWatchlist] = useState<string[]>(initial.watchlist);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
   const [archiveQuery, setArchiveQuery] = useState("");
@@ -73,8 +77,17 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   }, [communityPresetsApplied]);
 
   const persisted = useMemo<DeskState>(() => ({
-    version: 1, sources, provider, articles: savedArticles, rejectedItems, rejectionLearning: learning, selectedBroadcastDate, communityPresetsApplied,
-  }), [sources, provider, savedArticles, rejectedItems, learning, selectedBroadcastDate, communityPresetsApplied]);
+    version: 1, sources, provider, articles: savedArticles, rejectedItems, rejectionLearning: learning, selectedBroadcastDate, communityPresetsApplied, watchlist,
+  }), [sources, provider, savedArticles, rejectedItems, learning, selectedBroadcastDate, communityPresetsApplied, watchlist]);
+  useEffect(() => {
+    // Safety copies: one tagged snapshot right after a migration, and one per day on launch.
+    const today = localDateKey();
+    void (async () => {
+      if (migrated) await writeSnapshot(initial, today, "migration");
+      await writeSnapshot(initial, today);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const firstRender = useRef(true);
   useEffect(() => {
     // Skip the mount pass unless we just migrated and must write the new file right away.
@@ -118,8 +131,9 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   }
 
   const filtered = useMemo(() => {
-    return streamCandidates(learnedCandidates.filter((item) => !isRejected(item, rejectedIndex)), stream, filter);
-  }, [learnedCandidates, stream, filter, rejectedIndex]);
+    return streamCandidates(learnedCandidates.filter((item) => !isRejected(item, rejectedIndex)), stream, filter, watchlist);
+  }, [learnedCandidates, stream, filter, rejectedIndex, watchlist]);
+  const broadcastRecords = useMemo(() => savedArticles.filter((record) => record.broadcastDates.length > 0), [savedArticles]);
 
   const visibleCandidates = showMoreCandidates ? filtered : filtered.slice(0, 10);
   const checkedCandidates = learnedCandidates.filter((item) => candidateStream(item) === stream && !isRejected(item, rejectedIndex) && checkedIds.includes(rejectionId(item.url)));
@@ -295,7 +309,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     setCollecting(true);
     setStatus(`${streamLabel} 수집 및 후보 선별 중…`);
     try {
-      const r = await collect(activeSources, personalization, stream, await exclusionHashes(rejectedItems), activeRules.filter((rule) => rule.stream === stream));
+      const r = await collect(activeSources, personalization, stream, await exclusionHashes(rejectedItems), activeRules.filter((rule) => rule.stream === stream), watchlist);
       if (!r.ok) throw new Error(r.error ?? "수집 실패");
       const freshCandidates = r.candidates ?? [];
       setCandidates((current) => replaceStream(current, freshCandidates, stream));
@@ -347,7 +361,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   }
 
   function backupData() {
-    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate, rejectedItems, rejectionLearning: learning };
+    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate, rejectedItems, rejectionLearning: learning, watchlist };
   }
 
   async function exportBackup() {
@@ -384,7 +398,9 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
         rejectionLearning: pendingBackup.rejectionLearning ?? DEFAULT_LEARNING,
         selectedBroadcastDate: pendingBackup.selectedBroadcastDate,
         communityPresetsApplied: true,
+        watchlist: pendingBackup.watchlist ?? [],
       });
+      setWatchlist(pendingBackup.watchlist ?? []);
       setSavedArticles(pendingBackup.articles);
       setRejectedItems(pendingBackup.rejectedItems ?? []);
       setLearning(pendingBackup.rejectionLearning ?? DEFAULT_LEARNING);
@@ -528,6 +544,8 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
                   running={running}
                   checked={checkedIds.includes(rejectionId(item.url))}
                   focused={item.event_id === focusedId}
+                  watchHits={watchMatches(item, watchlist)}
+                  priorBroadcast={findPriorBroadcast(item, broadcastRecords, localDateKey())}
                   selectedBroadcastDate={selectedBroadcastDate}
                   labelDraft={labelDrafts[id] ?? ""}
                   onToggleChecked={() => toggleChecked(rejectionId(item.url))}
@@ -613,7 +631,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
         />
       )}
       {tab === "settings" && settingsSection === "sources" && <SourcesPanel sources={sources} onChange={setSources} />}
-      {tab === "settings" && settingsSection === "rules" && <RulesPanel />}
+      {tab === "settings" && settingsSection === "rules" && <RulesPanel watchlist={watchlist} onWatchlistChange={setWatchlist} />}
       {tab === "settings" && settingsSection === "security" && <SecurityPanel />}
 
       {availableUpdate && (

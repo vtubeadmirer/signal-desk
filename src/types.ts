@@ -38,6 +38,7 @@ export type Candidate = {
   source_count: number;
   frames: string[];
   engagement?: { recommendations: number; comments: number; views: number } | null;
+  watch_matches?: string[];
   why_now?: string;
   confirmed_facts?: string[];
   discussion_points?: string[];

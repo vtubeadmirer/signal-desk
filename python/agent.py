@@ -575,8 +575,32 @@ def is_low_value_news(item: dict) -> bool:
     return False
 
 
-def build_candidates(items: list[dict], personalization: dict | None = None, excluded_hashes: set[str] | None = None, negative_rules: list[dict] | None = None, negative_stats: dict | None = None) -> list[dict]:
+MAX_WATCHLIST = 50
+
+
+def validate_watchlist(value: object) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_WATCHLIST:
+        raise ValueError("워치리스트는 최대 50개입니다.")
+    terms: list[str] = []
+    for term in value:
+        if not isinstance(term, str) or not 2 <= len(term) <= 40 or term != " ".join(term.split()):
+            raise ValueError("워치리스트 단어 형식이 올바르지 않습니다.")
+        terms.append(term)
+    return terms
+
+
+def watch_matches(item: dict, watchlist: list[str]) -> list[str]:
+    if not watchlist:
+        return []
+    text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+    return [term for term in watchlist if term.lower() in text]
+
+
+def build_candidates(items: list[dict], personalization: dict | None = None, excluded_hashes: set[str] | None = None, negative_rules: list[dict] | None = None, negative_stats: dict | None = None, watchlist: list[str] | None = None) -> list[dict]:
     now = datetime.now(timezone.utc)
+    watchlist = watchlist or []
     items = [item for item in items
              if not is_rejected(item, excluded_hashes or set())
              and not is_low_value_news(item)
@@ -702,8 +726,10 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
             "frames": frames,
             "engagement": primary.get("engagement"),
             "caveats": primary.get("caveats", []),
+            "watch_matches": watch_matches(primary, watchlist),
         })
-    output.sort(key=lambda x: (-x["score"], x["verification_cost"], -x["source_count"]))
+    # Watchlist hits are pinned above everything else so the top-20 cut never drops them.
+    output.sort(key=lambda x: (-bool(x["watch_matches"]), -x["score"], x["verification_cost"], -x["source_count"]))
     for i, item in enumerate(output, start=1):
         item["priority"] = i
         item["slide_order"] = i
@@ -928,6 +954,7 @@ def handle(request: dict) -> dict:
             return {"ok": False, "op": op, "error": "지원하지 않는 수집 목록입니다."}
         try:
             negative_rules = validate_rules(request.get("negative_rules", []), stream)
+            watchlist = validate_watchlist(request.get("watchlist"))
         except ValueError as exc:
             return {"ok": False, "op": op, "error": str(exc)}
         excluded_hashes = request.get("excluded_hashes", [])
@@ -950,7 +977,7 @@ def handle(request: dict) -> dict:
         if not isinstance(personalization, dict):
             personalization = {}
         negative_stats: dict[str, int] = {}
-        candidates = build_candidates(items, personalization, set(excluded_hashes), negative_rules, negative_stats)
+        candidates = build_candidates(items, personalization, set(excluded_hashes), negative_rules, negative_stats, watchlist)
         for candidate in candidates:
             candidate["event_id"] = f"{stream}-{candidate['event_id']}"
         message = f"수집 {len(items)}건 → 후보 {len(candidates)}건" + (" (취소됨: 받은 소스까지만 반영)" if cancelled else "")

@@ -2,13 +2,14 @@ import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CATEGORIES, COMMUNITY_SOURCES, DEFAULT_SOURCES } from "../storage";
 import { youtubeChannelId, youtubeFeedUrl } from "../youtube";
+import { MAX_WATCHLIST, MAX_WATCH_TERM, addWatchTerm } from "../watchlist";
 import type { DeskBackup } from "../backup";
 import type { Source } from "../types";
 
 export type SettingsSection = "sources" | "rules" | "security" | "backup" | "excluded";
 
 export function SettingsNav({ section, onChange }: { section: SettingsSection; onChange: (section: SettingsSection) => void }) {
-  const entries: [SettingsSection, string][] = [["sources", "뉴스 소스"], ["rules", "뉴스 선별"], ["excluded", "제외 목록"], ["backup", "백업·복원"], ["security", "보안"]];
+  const entries: [SettingsSection, string][] = [["sources", "뉴스 소스"], ["rules", "워치리스트·선별"], ["excluded", "제외 목록"], ["backup", "백업·복원"], ["security", "보안"]];
   return (
     <div className="content narrow settings-switch">
       <nav className="settings-subtabs">
@@ -87,10 +88,33 @@ export function SourcesPanel({ sources, onChange }: { sources: Source[]; onChang
   );
 }
 
-export function RulesPanel() {
+export function RulesPanel({ watchlist, onWatchlistChange }: { watchlist: string[]; onWatchlistChange: (next: string[]) => void }) {
+  const [draft, setDraft] = useState("");
+  function add() {
+    const next = addWatchTerm(watchlist, draft);
+    if (next !== watchlist) { onWatchlistChange(next); setDraft(""); }
+  }
   return (
     <main className="content narrow">
       <section className="panel">
+        <div className="panel-head">
+          <div>
+            <span className="eyebrow">WATCHLIST</span>
+            <h1>워치리스트</h1>
+            <p>여기 적힌 이름이 제목이나 요약에 들어 있는 기사는 점수와 관계없이 목록 맨 위에 고정됩니다. 다루는 스트리머, 게임, 회사 이름을 등록하세요. 편집 규칙(범죄·정치 제외)은 그대로 적용됩니다.</p>
+          </div>
+        </div>
+        <div className="youtube-add">
+          <input value={draft} maxLength={MAX_WATCH_TERM} placeholder="예: 페이커, 치지직, 홀로라이브" aria-label="워치리스트 단어" onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
+          <button className="secondary" disabled={watchlist.length >= MAX_WATCHLIST} onClick={add}>추가</button>
+        </div>
+        {watchlist.length > 0 ? (
+          <div className="personal-labels" aria-label="워치리스트">
+            {watchlist.map((term) => <button key={term} title="이 단어 삭제" onClick={() => onWatchlistChange(watchlist.filter((value) => value !== term))}>{term} ×</button>)}
+          </div>
+        ) : <p className="inline-status">아직 등록한 단어가 없습니다. 최대 {MAX_WATCHLIST}개까지 등록할 수 있습니다.</p>}
+      </section>
+      <section className="panel" style={{ marginTop: 12 }}>
         <div className="panel-head">
           <div>
             <span className="eyebrow">EDITORIAL RULES</span>

@@ -1,4 +1,4 @@
-# Signal Desk — Secure Desktop v0.5
+# Signal Desk — Secure Desktop v0.6
 
 Signal Desk is a local-first Windows desktop prototype for broadcast-news curation.
 
@@ -68,15 +68,13 @@ The collector intentionally accepts HTTPS feed URLs only and rejects private/loo
 
 ## Release
 
-Do not publish a release until you have configured:
+The updater public key and release endpoint are configured. To publish a signed release:
 
-- Tauri updater public key in `src-tauri/tauri.conf.json`
-- Tauri updater private key in GitHub protected environment secret
-- Windows code-signing certificate/password
-- repository owner/name in the updater endpoint
-- protected release environment/tag rules
+1. Add the updater private key as the `TAURI_SIGNING_PRIVATE_KEY` secret of the protected `release` environment (the key was generated with `tauri signer generate` and is kept outside the repository).
+2. Optionally add the Windows code-signing secrets (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`, `WINDOWS_CERTIFICATE_TIMESTAMP_URL`). Without them the installer is unsigned and SmartScreen warns once; updates are still verified by the updater signature.
+3. Push a `v*` tag (for example `v0.6.0`). The workflow builds, signs the updater manifest, attests the installer and creates the GitHub Release. Installed apps then offer the update on next launch.
 
-The release workflow intentionally fails while placeholders or missing signing secrets remain.
+The workflow refuses to run without the updater private key.
 
 ## Collection and analysis behavior
 
@@ -153,5 +151,15 @@ Returned candidates retain their pre-penalty score and penalty explanation; coll
 - **YouTube channel feeds.** Settings → 뉴스 소스 has a field for a channel ID or `youtube.com/channel/UC…` URL; it adds YouTube's official per-channel Atom feed as an `official` source. Only titles, descriptions and watch links are collected through the normal HTTPS-only RSS path. `@handle` URLs cannot be resolved offline; copy the channel ID from the channel's share menu.
 - **Broadcast cue sheet.** The 방송 준비 tab can copy or save a markdown run sheet for the selected date: numbered stories ordered by score with source, link, summary, AI discussion points, caveats, labels and your notes.
 - The sidecar capability set adds scoped read/write for the app's own local-data directory only.
+
+Verification: `python -m unittest discover -s python/tests`, `node --test "tests/*.test.cjs"`, `npm run build`.
+
+## v0.6.0: watchlist, prior-broadcast badge, snapshots, release signing
+
+- **Watchlist** (Settings → 워치리스트·선별): names that must never slip through. A candidate whose title or summary contains a watch term is pinned above every other candidate, both in the sidecar before the top-20 cut and in the UI, and carries a 워치리스트 badge. Crime, harassment and political exclusions still apply. Up to 50 terms; included in backups (format v1, optional field).
+- **Already aired badge**: a candidate that matches a story already placed on a broadcast date within the last 14 days (same link, same title, or at least three shared specific title tokens) shows 「이미 방송 MM/DD」 with the earlier title on hover, so the same story is not covered twice by accident.
+- **Snapshots**: on launch the app writes a dated copy of its data file to `signal-desk\snapshots\` (one per day; a tagged copy right after the localStorage migration) and keeps the newest seven.
+- **Release signing**: the updater public key and endpoint are set, so the in-app update check is active. The release workflow now requires only the updater private key; Windows code signing is optional until a certificate exists.
+- Capability: `fs:allow-read-dir` for snapshot pruning inside the app's own data folder.
 
 Verification: `python -m unittest discover -s python/tests`, `node --test "tests/*.test.cjs"`, `npm run build`.

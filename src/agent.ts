@@ -75,11 +75,12 @@ export async function collect(
   stream: "news" | "community" = "news",
   excludedHashes: string[] = [],
   negativeRules: NegativeRule[] = [],
+  watchlist: string[] = [],
 ) {
   const requestId = String(++nextId);
   activeCollect = requestId;
   try {
-    return await callAgent({ op: "collect", sources, personalization, stream, excluded_hashes: excludedHashes, negative_rules: negativeRules, request_id: requestId });
+    return await callAgent({ op: "collect", sources, personalization, stream, excluded_hashes: excludedHashes, negative_rules: negativeRules, watchlist, request_id: requestId });
   } finally {
     if (activeCollect === requestId) activeCollect = null;
   }
