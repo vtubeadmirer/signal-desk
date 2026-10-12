@@ -5,6 +5,7 @@ import type { AgentResponse, Source, Candidate, PersonalizationProfile } from ".
 type Child = Awaited<ReturnType<Command<string>["spawn"]>>;
 let starting: Promise<Child> | null = null;
 let nextId = 0;
+let activeCollect: string | null = null;
 const pending = new Map<string, { resolve: (value: AgentResponse) => void; reject: (reason: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
 
 function rejectAll(error: unknown) {
@@ -47,7 +48,7 @@ function startAgent(): Promise<Child> {
 
 export async function callAgent(payload: Record<string, unknown>): Promise<AgentResponse> {
   const child = await startAgent();
-  const requestId = String(++nextId);
+  const requestId = typeof payload.request_id === "string" ? payload.request_id : String(++nextId);
   return new Promise<AgentResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(requestId);
@@ -75,7 +76,21 @@ export async function collect(
   excludedHashes: string[] = [],
   negativeRules: NegativeRule[] = [],
 ) {
-  return callAgent({ op: "collect", sources, personalization, stream, excluded_hashes: excludedHashes, negative_rules: negativeRules });
+  const requestId = String(++nextId);
+  activeCollect = requestId;
+  try {
+    return await callAgent({ op: "collect", sources, personalization, stream, excluded_hashes: excludedHashes, negative_rules: negativeRules, request_id: requestId });
+  } finally {
+    if (activeCollect === requestId) activeCollect = null;
+  }
+}
+
+/** Ask the sidecar to finish the running collection with whatever it has fetched so far. */
+export async function cancelCollection(): Promise<boolean> {
+  const target = activeCollect;
+  if (!target) return false;
+  const r = await callAgent({ op: "cancel", target });
+  return Boolean(r.ok && (r as { cancelled?: boolean }).cancelled);
 }
 
 export async function analyze(candidates: Candidate[], provider: string) {

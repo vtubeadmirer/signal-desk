@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { learnNegativeRules, activeNegativeRules, applyNegativeRules, negativePenalty, type NegativeRule } from "./negativePreferences";
 import { DEFAULT_LEARNING, type LearningSettings, addRejections, exclusionHashes, isRejected, rejectionId, rejectionIndex, normalizedTitle, type RejectedItem } from "./rejections";
 import { candidateStream, sourceStream, streamCandidates, replaceStream, type SignalStream, type SavedStream } from "./streams";
-import { parseBackup, serializeBackup, writeStorageAtomically, type DeskBackup } from "./backup";
+import { parseBackup, serializeBackup, type DeskBackup } from "./backup";
 import { readBackupFile, saveBackupFile } from "./backupFiles";
-import { analyze, collect, health } from "./agent";
-import {
-  ARTICLES_KEY, CATEGORIES, COMMUNITY_MIGRATION_KEY, COMMUNITY_SOURCES, DATE_KEY, LEARNING_KEY, PROVIDER_KEY, REJECTIONS_KEY, STORAGE_KEY,
-  articleId, isSavedArticle, loadLearning, loadRejections, loadSavedArticles, loadSources, localDateKey,
-} from "./storage";
-import type { ArticleRecord, Candidate, PersonalizationProfile } from "./types";
+import { analyze, cancelCollection, collect, health } from "./agent";
+import { CATEGORIES, COMMUNITY_SOURCES, articleId, isSavedArticle } from "./storage";
+import { flushState, saveState } from "./persist";
+import type { DeskState } from "./state";
+import type { ArticleRecord, Candidate, PersonalizationProfile, Source } from "./types";
 import { ArchiveTab } from "./components/ArchiveTab";
 import { CandidateCard } from "./components/CandidateCard";
 import { ExcludedPanel } from "./components/ExcludedPanel";
@@ -20,18 +20,18 @@ import { UpdateModal } from "./components/UpdateModal";
 
 type Tab = "today" | "community" | "prep" | "archive" | "settings";
 
-export default function App() {
+export default function App({ initial, migrated, loadError }: { initial: DeskState; migrated: boolean; loadError?: string }) {
   const [tab, setTab] = useState<Tab>("today");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("sources");
-  const [sources, setSources] = useState(loadSources);
-  const [provider, setProvider] = useState(localStorage.getItem(PROVIDER_KEY) ?? "codex");
-  const [status, setStatus] = useState("준비됨");
+  const [sources, setSources] = useState<Source[]>(initial.sources);
+  const [provider, setProvider] = useState(initial.provider);
+  const [status, setStatus] = useState(loadError ?? (migrated ? "이전 버전의 데이터를 새 저장 방식으로 옮겼습니다." : "준비됨"));
   const [providerStatus, setProviderStatus] = useState<{ installed: boolean; authenticated?: boolean; version?: string; auth_hint?: string } | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [savedArticles, setSavedArticles] = useState<ArticleRecord[]>(loadSavedArticles);
-  const [rejectedItems, setRejectedItems] = useState<RejectedItem[]>(loadRejections);
+  const [savedArticles, setSavedArticles] = useState<ArticleRecord[]>(initial.articles);
+  const [rejectedItems, setRejectedItems] = useState<RejectedItem[]>(initial.rejectedItems);
   const rejectedIndex = useMemo(() => rejectionIndex(rejectedItems), [rejectedItems]);
-  const [learning, setLearning] = useState<LearningSettings>(loadLearning);
+  const [learning, setLearning] = useState<LearningSettings>(initial.rejectionLearning);
   const [learningQuery, setLearningQuery] = useState("");
   const [learningStream, setLearningStream] = useState<SavedStream>("all");
   const learnedRules = useMemo(() => learnNegativeRules(rejectedItems, learning.mode), [rejectedItems, learning.mode]);
@@ -39,7 +39,9 @@ export default function App() {
   const learnedCandidates = useMemo(() => applyNegativeRules(candidates, activeRules), [candidates, activeRules]);
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [excludedQuery, setExcludedQuery] = useState("");
-  const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(() => localStorage.getItem(DATE_KEY) || localDateKey());
+  const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(initial.selectedBroadcastDate);
+  const [communityPresetsApplied, setCommunityPresetsApplied] = useState(initial.communityPresetsApplied);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
   const [archiveQuery, setArchiveQuery] = useState("");
   const stream: SignalStream = tab === "community" ? "community" : "news";
@@ -53,6 +55,7 @@ export default function App() {
   function setShowMoreCandidates(value: boolean) { setExpanded((current) => ({ ...current, [stream]: value })); }
   const [savedStream, setSavedStream] = useState<SavedStream>("all");
   const [running, setRunning] = useState(false);
+  const [collecting, setCollecting] = useState(false);
   const [lastRuns, setLastRuns] = useState<Record<SignalStream, string>>({ news: "", community: "" });
   const lastRun = lastRuns[stream];
   function setLastRun(value: string) { setLastRuns((current) => ({ ...current, [stream]: value })); }
@@ -63,19 +66,21 @@ export default function App() {
   const [pendingBackup, setPendingBackup] = useState<DeskBackup | null>(null);
 
   useEffect(() => {
-    if (!localStorage.getItem(COMMUNITY_MIGRATION_KEY)) {
+    if (!communityPresetsApplied) {
       setSources((current) => [...current, ...COMMUNITY_SOURCES.filter((preset) => !current.some((source) => source.url === preset.url))].slice(0, 50));
-      localStorage.setItem(COMMUNITY_MIGRATION_KEY, "1");
+      setCommunityPresetsApplied(true);
     }
-  }, []);
+  }, [communityPresetsApplied]);
 
-  useEffect(() => { localStorage.setItem(DATE_KEY, selectedBroadcastDate); }, [selectedBroadcastDate]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(sources)); }, [sources]);
-  useEffect(() => { localStorage.setItem(PROVIDER_KEY, provider); }, [provider]);
+  const persisted = useMemo<DeskState>(() => ({
+    version: 1, sources, provider, articles: savedArticles, rejectedItems, rejectionLearning: learning, selectedBroadcastDate, communityPresetsApplied,
+  }), [sources, provider, savedArticles, rejectedItems, learning, selectedBroadcastDate, communityPresetsApplied]);
+  const firstRender = useRef(true);
   useEffect(() => {
-    try { localStorage.setItem(ARTICLES_KEY, JSON.stringify(savedArticles)); }
-    catch { setStatus("보관함을 저장하지 못했습니다. 저장 공간을 확인하고 백업 내보내기로 내용을 보존하세요."); }
-  }, [savedArticles]);
+    // Skip the mount pass unless we just migrated and must write the new file right away.
+    if (firstRender.current) { firstRender.current = false; if (!migrated) return; }
+    saveState(persisted, () => setStatus("데이터를 저장하지 못했습니다. 디스크 공간을 확인하고 백업 내보내기로 내용을 보존하세요."));
+  }, [persisted, migrated]);
 
   async function refreshHealth() {
     try {
@@ -131,12 +136,9 @@ export default function App() {
   }
 
   function persistLearning(settings: LearningSettings) {
-    try {
-      localStorage.setItem(LEARNING_KEY, JSON.stringify(settings));
-      setLearning(settings);
-      setCheckedIds([]);
-      setStatus("제외 성향 설정을 저장했습니다. 다음 수집부터 해당 성향으로 후보를 선별합니다.");
-    } catch { setStatus("제외 성향 설정을 저장하지 못했습니다. 기존 설정을 유지합니다."); }
+    setLearning(settings);
+    setCheckedIds([]);
+    setStatus("제외 성향 설정을 저장했습니다. 다음 수집부터 해당 성향으로 후보를 선별합니다.");
   }
 
   function toggleRule(rule: NegativeRule) {
@@ -147,7 +149,6 @@ export default function App() {
   }
 
   function persistRejections(items: RejectedItem[]) {
-    localStorage.setItem(REJECTIONS_KEY, JSON.stringify(items));
     setRejectedItems(items);
   }
 
@@ -291,6 +292,7 @@ export default function App() {
 
   async function runCollection() {
     setRunning(true);
+    setCollecting(true);
     setStatus(`${streamLabel} 수집 및 후보 선별 중…`);
     try {
       const r = await collect(activeSources, personalization, stream, await exclusionHashes(rejectedItems), activeRules.filter((rule) => rule.stream === stream));
@@ -310,10 +312,12 @@ export default function App() {
       });
       setShowMoreCandidates(false);
       setLastRun(new Date().toLocaleString("ko-KR"));
-      setStatus(`${streamLabel} 후보 ${r.candidates?.length ?? 0}개를 만들었습니다.${r.negative_stats ? ` 제외 성향으로 ${r.negative_stats.suppressed}건 제외 · ${r.negative_stats.demoted}건 감점.` : ""}${r.errors?.length ? ` 수집 실패: ${r.errors.join(" / ")}` : ""}`);
+      setFocusedId(null);
+      setStatus(`${streamLabel} 후보 ${r.candidates?.length ?? 0}개를 만들었습니다.${r.cancelled ? " 중단 요청으로 받은 소스까지만 반영했습니다." : ""}${r.negative_stats ? ` 제외 성향으로 ${r.negative_stats.suppressed}건 제외 · ${r.negative_stats.demoted}건 감점.` : ""}${r.errors?.length ? ` 수집 실패: ${r.errors.join(" / ")}` : ""}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "수집 중 오류가 발생했습니다.");
     } finally {
+      setCollecting(false);
       setRunning(false);
       await refreshHealth();
     }
@@ -366,17 +370,20 @@ export default function App() {
     finally { setBackupBusy(false); }
   }
 
-  function restoreBackup() {
+  async function restoreBackup() {
     if (!pendingBackup) return;
+    setBackupBusy(true);
     try {
-      writeStorageAtomically(localStorage, {
-        [ARTICLES_KEY]: JSON.stringify(pendingBackup.articles),
-        [STORAGE_KEY]: JSON.stringify(pendingBackup.sources),
-        [PROVIDER_KEY]: pendingBackup.provider,
-        [DATE_KEY]: pendingBackup.selectedBroadcastDate,
-        [REJECTIONS_KEY]: JSON.stringify(pendingBackup.rejectedItems ?? []),
-        [LEARNING_KEY]: JSON.stringify(pendingBackup.rejectionLearning ?? DEFAULT_LEARNING),
-        [COMMUNITY_MIGRATION_KEY]: "1",
+      // Write the whole document first; state only changes once the file is safely on disk.
+      await flushState({
+        version: 1,
+        sources: pendingBackup.sources,
+        provider: pendingBackup.provider,
+        articles: pendingBackup.articles,
+        rejectedItems: pendingBackup.rejectedItems ?? [],
+        rejectionLearning: pendingBackup.rejectionLearning ?? DEFAULT_LEARNING,
+        selectedBroadcastDate: pendingBackup.selectedBroadcastDate,
+        communityPresetsApplied: true,
       });
       setSavedArticles(pendingBackup.articles);
       setRejectedItems(pendingBackup.rejectedItems ?? []);
@@ -391,9 +398,48 @@ export default function App() {
       setExpanded({ news: false, community: false });
       setSavedStream("all");
       setArchiveQuery("");
+      setCommunityPresetsApplied(true);
       setPendingBackup(null);
       setBackupStatus("보관함·방송 준비·소스 설정을 복원했습니다. AI 로그인은 이 PC에서 연결하세요.");
     } catch { setBackupStatus("저장 공간이 부족하거나 저장소에 접근할 수 없어 복원하지 못했습니다. 기존 데이터는 유지됩니다."); }
+    finally { setBackupBusy(false); }
+  }
+
+  // --- Keyboard navigation on the candidate list -------------------------------------------
+  const focusedIndex = focusedId ? visibleCandidates.findIndex((item) => item.event_id === focusedId) : -1;
+  useEffect(() => {
+    if (tab !== "today" && tab !== "community") return;
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      if (!visibleCandidates.length) return;
+      const key = event.key.toLowerCase();
+      const move = (delta: number) => {
+        const start = focusedIndex < 0 ? (delta > 0 ? -1 : visibleCandidates.length) : focusedIndex;
+        const next = Math.min(visibleCandidates.length - 1, Math.max(0, start + delta));
+        const item = visibleCandidates[next];
+        setFocusedId(item.event_id);
+        document.querySelector(`[data-candidate-id="${item.event_id}"]`)?.scrollIntoView({ block: "nearest" });
+      };
+      if (key === "j" || key === "arrowdown") { event.preventDefault(); move(1); return; }
+      if (key === "k" || key === "arrowup") { event.preventDefault(); move(-1); return; }
+      const item = focusedIndex >= 0 ? visibleCandidates[focusedIndex] : null;
+      if (!item) return;
+      if (key === "x" && !running) { event.preventDefault(); rejectCandidates([item]); move(1); }
+      else if (key === "s") { event.preventDefault(); toggleInterest(item); }
+      else if (key === "b") { event.preventDefault(); toggleBroadcastDate(item); }
+      else if (key === "c") { event.preventDefault(); toggleChecked(rejectionId(item.url)); }
+      else if (key === "o" || key === "enter") { event.preventDefault(); void openUrl(item.url); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  async function cancelRunningCollection() {
+    setStatus("수집을 중단하고 지금까지 받은 소스로 후보를 만듭니다…");
+    const accepted = await cancelCollection().catch(() => false);
+    if (!accepted) setStatus("중단할 수집이 없습니다.");
   }
 
   return (
@@ -428,6 +474,7 @@ export default function App() {
               <button className="primary" disabled={running || activeSources.length === 0} onClick={runCollection}>
                 {running ? "처리 중…" : stream === "news" ? "뉴스 가져오기" : "커뮤니티 소식 가져오기"}
               </button>
+              {collecting && <button className="secondary" onClick={() => void cancelRunningCollection()}>중단하고 지금까지로</button>}
               <button className="secondary" disabled={running || !filtered.length || !providerStatus?.authenticated} onClick={runAiAnalysis}>
                 AI 분석
               </button>
@@ -463,6 +510,7 @@ export default function App() {
             <button className="danger" disabled={running || checkedCandidates.length === 0} onClick={() => rejectCandidates(checkedCandidates)}>선택 {checkedCandidates.length}개 제외</button>
             <button className="secondary" onClick={() => { setTab("settings"); setSettingsSection("excluded"); }}>제외 목록 ({rejectedItems.length})</button>
             <span>제외한 글은 다음 수집과 AI 분석에서도 빠집니다.</span>
+            <span className="shortcut-hint" title="입력창 밖에서 동작합니다"><kbd>J</kbd><kbd>K</kbd> 이동 · <kbd>X</kbd> 제외 · <kbd>S</kbd> 관심 · <kbd>B</kbd> 방송 준비 · <kbd>C</kbd> 선택 · <kbd>O</kbd> 원문</span>
           </section>
           <section className="signals-grid">
             {filtered.length === 0 ? (
@@ -479,6 +527,7 @@ export default function App() {
                   record={savedById.get(id)}
                   running={running}
                   checked={checkedIds.includes(rejectionId(item.url))}
+                  focused={item.event_id === focusedId}
                   selectedBroadcastDate={selectedBroadcastDate}
                   labelDraft={labelDrafts[id] ?? ""}
                   onToggleChecked={() => toggleChecked(rejectionId(item.url))}
@@ -559,7 +608,7 @@ export default function App() {
           pending={pendingBackup}
           onExport={() => void exportBackup()}
           onImport={() => void importBackup()}
-          onRestore={restoreBackup}
+          onRestore={() => void restoreBackup()}
           onCancel={() => setPendingBackup(null)}
         />
       )}

@@ -28,13 +28,6 @@ test('malformed, future-version and unsafe-link backups are rejected',()=>{
  original.articles[0].broadcastDates=['2026-10-12'];original.articles.push(original.articles[0]);
  assert.throws(()=>api.parseBackup(JSON.stringify(original)));
 });
-test('failed restore rolls storage back without partially replacing data',()=>{
- const map=new Map([['articles','old articles'],['sources','old sources']]);
- let fail=true;
- const storage={getItem:k=>map.get(k)??null,removeItem:k=>map.delete(k),setItem:(k,v)=>{if(k==='sources'&&fail){fail=false;throw Error('quota');}map.set(k,v);}};
- assert.throws(()=>api.writeStorageAtomically(storage,{articles:'new articles',sources:'new sources'}));
- assert.equal(map.get('articles'),'old articles');assert.equal(map.get('sources'),'old sources');
-});
 
 test('backup preserves rejection preferences and accepts old backups without them',()=>{
  const original=data();

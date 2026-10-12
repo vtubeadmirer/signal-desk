@@ -92,14 +92,3 @@ export function serializeBackup(data: Omit<DeskBackup, "format" | "version" | "e
   return raw;
 }
 
-export function writeStorageAtomically(storage: Pick<Storage, "getItem" | "setItem" | "removeItem">, values: Record<string, string>) {
-  const previous = Object.fromEntries(Object.keys(values).map((key) => [key, storage.getItem(key)]));
-  try {
-    for (const [key, value] of Object.entries(values)) storage.setItem(key, value);
-  } catch (error) {
-    // Remove new values first so rollback still works when the quota is full.
-    for (const key of Object.keys(values)) storage.removeItem(key);
-    for (const [key, value] of Object.entries(previous)) if (value !== null) storage.setItem(key, value);
-    throw error;
-  }
-}

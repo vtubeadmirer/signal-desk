@@ -18,3 +18,10 @@ export async function readBackupFile(): Promise<string | null> {
   if ((await stat(path)).size > MAX_BACKUP_BYTES) throw new Error("백업 파일은 4MB 이하여야 합니다.");
   return readTextFile(path);
 }
+
+export async function saveCueSheetFile(text: string, date: string) {
+  const path = await save({ title: "방송 큐시트 저장", defaultPath: `signal-desk-cuesheet-${date}.md`, filters: [{ name: "Markdown", extensions: ["md"] }, { name: "텍스트", extensions: ["txt"] }] });
+  if (!path) return false;
+  await writeTextFile(path, text);
+  return true;
+}

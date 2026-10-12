@@ -2,11 +2,13 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { summaryPreview } from "../storage";
 import type { ArticleRecord, Candidate } from "../types";
 
-export function CandidateCard({ item, record, running, checked, selectedBroadcastDate, labelDraft, onToggleChecked, onReject, onToggleInterest, onToggleBroadcastDate, onLabelDraftChange, onAddLabel, onRemoveLabel }: {
+export function CandidateCard({ item, record, running, checked, focused, selectedBroadcastDate, labelDraft, onToggleChecked, onReject, onToggleInterest, onToggleBroadcastDate, onLabelDraftChange, onAddLabel, onRemoveLabel }: {
   item: Candidate;
   record: ArticleRecord | undefined;
   running: boolean;
   checked: boolean;
+  /** Keyboard cursor (J/K) is on this card. */
+  focused: boolean;
   selectedBroadcastDate: string;
   labelDraft: string;
   onToggleChecked: () => void;
@@ -20,7 +22,7 @@ export function CandidateCard({ item, record, running, checked, selectedBroadcas
   const interested = Boolean(record?.interested);
   const scheduled = Boolean(record?.broadcastDates.includes(selectedBroadcastDate));
   return (
-    <article className="signal-card">
+    <article className={focused ? "signal-card focused" : "signal-card"} data-candidate-id={item.event_id}>
       <label className="candidate-checkbox"><input type="checkbox" aria-label={`${item.title} 제외 대상으로 선택`} checked={checked} disabled={running} onChange={onToggleChecked} /> 제외할 후보 선택</label>
       <div className="signal-meta">
         <span className="badge">{item.category}</span>

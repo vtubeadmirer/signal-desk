@@ -1,6 +1,9 @@
+import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { candidateStream, type SavedStream } from "../streams";
 import { summaryPreview } from "../storage";
+import { buildCueSheet } from "../cuesheet";
+import { saveCueSheetFile } from "../backupFiles";
 import type { ArticleRecord } from "../types";
 import { SavedStreamFilter } from "./SavedStreamFilter";
 
@@ -14,9 +17,33 @@ export function PrepTab({ savedArticles, selectedBroadcastDate, onDateChange, sa
   removeLabel: (id: string, label: string) => void;
   goToNews: () => void;
 }) {
+  const [cueStatus, setCueStatus] = useState("");
   const planned = savedArticles
     .filter((record) => record.broadcastDates.includes(selectedBroadcastDate) && (savedStream === "all" || candidateStream(record.candidate) === savedStream))
     .sort((a, b) => a.candidate.score < b.candidate.score ? 1 : -1);
+
+  function cueSheet() {
+    // The run sheet always covers the whole date, independent of the stream filter.
+    return buildCueSheet(savedArticles, selectedBroadcastDate);
+  }
+
+  async function copyCueSheet() {
+    try {
+      await navigator.clipboard.writeText(cueSheet());
+      setCueStatus("큐시트를 클립보드에 복사했습니다. 메모 앱이나 방송 소프트웨어에 붙여 넣으세요.");
+    } catch {
+      setCueStatus("클립보드를 사용할 수 없습니다. 「큐시트 파일로 저장」을 이용하세요.");
+    }
+  }
+
+  async function saveCueSheet() {
+    try {
+      const saved = await saveCueSheetFile(cueSheet(), selectedBroadcastDate);
+      setCueStatus(saved ? "큐시트를 파일로 저장했습니다." : "저장을 취소했습니다.");
+    } catch (error) {
+      setCueStatus(error instanceof Error ? error.message : "큐시트를 저장하지 못했습니다.");
+    }
+  }
 
   return (
     <main className="content">
@@ -31,7 +58,12 @@ export function PrepTab({ savedArticles, selectedBroadcastDate, onDateChange, sa
           <input className="date-input" type="date" value={selectedBroadcastDate} onChange={(event) => onDateChange(event.target.value)} />
         </label>
       </section>
-      <SavedStreamFilter value={savedStream} onChange={onSavedStreamChange} />
+      <div className="prep-actions">
+        <SavedStreamFilter value={savedStream} onChange={onSavedStreamChange} />
+        <button className="secondary" disabled={!planned.length} onClick={() => void copyCueSheet()}>큐시트 복사</button>
+        <button className="secondary" disabled={!planned.length} onClick={() => void saveCueSheet()}>큐시트 파일로 저장</button>
+      </div>
+      {cueStatus && <p className="inline-status" role="status">{cueStatus}</p>}
       <section className="saved-list">
         {planned.map((record) => (
           <article className="saved-card" key={record.id}>

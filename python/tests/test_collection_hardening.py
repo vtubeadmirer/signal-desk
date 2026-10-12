@@ -72,7 +72,7 @@ class ParallelCollectionTests(unittest.TestCase):
 
         sources = [{"name": f"s{i}", "enabled": True} for i in range(4)]
         with patch("agent.fetch_source", side_effect=fetch):
-            items, errors = agent.collect_sources(sources)
+            items, errors, cancelled = agent.collect_sources(sources)
         self.assertEqual(len(items), 4)
         self.assertEqual(errors, [])
         self.assertEqual(sorted(started), ["s0", "s1", "s2", "s3"])
@@ -87,7 +87,7 @@ class ParallelCollectionTests(unittest.TestCase):
             return [{"title": "ok"}]
 
         with patch("agent.fetch_source", side_effect=fetch):
-            items, errors = agent.collect_sources([{"name": "good"}, {"name": "bad"}, {"name": "xml"}])
+            items, errors, _ = agent.collect_sources([{"name": "good"}, {"name": "bad"}, {"name": "xml"}])
         self.assertEqual(len(items), 1)
         self.assertEqual(errors, ["bad: 피드 서버가 HTTP 404를 반환했습니다.", "xml: 피드 XML을 해석하지 못했습니다."])
 
@@ -98,9 +98,50 @@ class ParallelCollectionTests(unittest.TestCase):
             return [{"title": source["name"]}]
 
         with patch("agent.fetch_source", side_effect=fetch):
-            items, errors = agent.collect_sources([{"name": "fast"}, {"name": "slow"}], budget=0.3)
+            items, errors, cancelled = agent.collect_sources([{"name": "fast"}, {"name": "slow"}], budget=0.3)
         self.assertEqual([x["title"] for x in items], ["fast"])
         self.assertEqual(errors, ["slow: 수집 시간이 초과되어 건너뛰었습니다."])
+        self.assertFalse(cancelled)
+
+    def test_cancel_returns_finished_sources_only(self):
+        release = threading.Event()
+
+        def fetch(source):
+            if source["name"] == "slow":
+                release.wait(5)
+            return [{"title": source["name"]}]
+
+        cancel = threading.Event()
+        threading.Timer(0.3, cancel.set).start()
+        with patch("agent.fetch_source", side_effect=fetch):
+            items, errors, cancelled = agent.collect_sources([{"name": "fast"}, {"name": "slow"}], budget=10, cancel=cancel)
+        release.set()
+        self.assertTrue(cancelled)
+        self.assertEqual([x["title"] for x in items], ["fast"])
+        self.assertEqual(errors, ["slow: 취소되어 건너뛰었습니다."])
+
+    def test_cancel_op_targets_running_collect_by_request_id(self):
+        release = threading.Event()
+        started = threading.Event()
+
+        def fetch(source):
+            started.set()
+            release.wait(5)
+            return []
+
+        results = {}
+        with patch("agent.fetch_source", side_effect=fetch):
+            worker = threading.Thread(target=lambda: results.update(agent.handle({"op": "collect", "stream": "news", "request_id": "c1", "sources": [{"name": "s", "enabled": True}]})))
+            worker.start()
+            self.assertTrue(started.wait(2))
+            self.assertFalse(agent.handle({"op": "cancel", "target": "nope"})["cancelled"])
+            self.assertTrue(agent.handle({"op": "cancel", "target": "c1"})["cancelled"])
+            worker.join(5)
+        release.set()
+        self.assertTrue(results["ok"])
+        self.assertTrue(results["cancelled"])
+        self.assertIn("취소됨", results["message"])
+        self.assertFalse(agent.handle({"op": "cancel", "target": "c1"})["cancelled"], "cancel handle is released after the request ends")
 
     def test_handle_still_filters_sources_by_stream(self):
         with patch("agent.fetch_source", return_value=[]) as fetch:

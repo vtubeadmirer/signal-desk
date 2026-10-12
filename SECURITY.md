@@ -51,6 +51,10 @@ The end-user provider binary (for example, Codex CLI) is not redistributed by th
 
 The Python sidecar handles each stdin request on its own worker thread (bounded pool), and feed collection fans out across a small thread pool with a 120-second overall budget. A slow or hung feed therefore cannot block health checks or AI analysis, and a source that exceeds the budget is reported as skipped rather than stalling the whole collection. Shared state (community page cache, debug log) is guarded by locks. The debug log rotates at 1 MB and still never contains feed bodies, prompts, or provider output.
 
+## Local data file
+
+Since v0.5 the app's own data (sources, saved articles, notes, exclusions, learning settings) lives in one JSON document at `%LOCALAPPDATA%\com.signaldesk.desktop\signal-desk\state.json`, written atomically (temp file + rename). The filesystem capability is widened only to the app's own local-data directory (`fs:allow-applocaldata-*`); reads and writes elsewhere still require a path the user picked in a native dialog. The file contains no provider credentials. The pre-0.5 WebView `localStorage` layout is read once on first launch and migrated.
+
 ## Community and backup boundaries
 
 Public-list community collection is limited to the supported hosts and list paths, checks robots.txt before uncached fetches, and reuses the DNS-pinned HTTPS transport. No post bodies or comments are fetched. Community popularity never overrides editorial exclusions or manual review. Native backup dialogs grant file scope only for selected paths; no global filesystem scope is configured. Imported JSON is version/shape/size/link validated before explicit replacement of local state. Exported JSON contains no provider tokens.

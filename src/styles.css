@@ -228,3 +228,13 @@
 .learning-panel p {font-size:12px;line-height:1.8;color:#9aa4b2;}
 .learning-rule {padding:12px 0;border-bottom:1px solid #323a45;}
 .learning-rule small {display:block;margin-top:5px;color:#9aa4b2;font-size:11px;}
+
+/* Keyboard cursor and shortcut hint on the candidate list. */
+.signal-card.focused{border-color:#6f8cff;box-shadow:0 0 0 2px rgba(111,140,255,.35)}
+.shortcut-hint{color:#6f7886;font-size:11px;margin-left:auto}
+.shortcut-hint kbd{display:inline-block;padding:1px 5px;border:1px solid #39414c;border-radius:4px;background:#161b22;color:#c8cfd9;font:inherit;font-size:10px;margin-right:2px}
+.prep-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.youtube-add{display:flex;gap:7px;align-items:center;margin-top:14px}
+.youtube-add input{flex:1;height:38px;background:#0d1014;border:1px solid #2a3038;border-radius:8px;color:#dbe0e7;padding:0 9px}
+.youtube-add select{height:38px;background:#0d1014;border:1px solid #2a3038;border-radius:8px;color:#dbe0e7;padding:0 9px}
+.inline-status{color:#8f98a7;font-size:12px;margin-top:8px}

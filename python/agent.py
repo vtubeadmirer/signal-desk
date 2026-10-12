@@ -14,7 +14,7 @@ import threading
 import traceback
 import time
 import math
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
@@ -847,20 +847,62 @@ def _fetch_error_reason(exc: BaseException) -> str:
     return "피드 수집 실패"
 
 
-def collect_sources(sources: list[dict], budget: float = COLLECT_BUDGET_SECONDS) -> tuple[list[dict], list[str]]:
-    """Fetch every source concurrently so one slow feed cannot block the rest."""
+_cancel_events: dict[str, threading.Event] = {}
+_cancel_lock = threading.Lock()
+
+
+def _register_cancel(request_id: object) -> threading.Event | None:
+    if not isinstance(request_id, str) or not request_id:
+        return None
+    event = threading.Event()
+    with _cancel_lock:
+        _cancel_events[request_id] = event
+    return event
+
+
+def _release_cancel(request_id: object) -> None:
+    with _cancel_lock:
+        _cancel_events.pop(request_id, None)  # type: ignore[arg-type]
+
+
+def cancel_request(request_id: object) -> bool:
+    """Signal a running collection to return with whatever it has so far."""
+    with _cancel_lock:
+        event = _cancel_events.get(request_id)  # type: ignore[arg-type]
+    if event is None:
+        return False
+    event.set()
+    return True
+
+
+def collect_sources(sources: list[dict], budget: float = COLLECT_BUDGET_SECONDS, cancel: threading.Event | None = None) -> tuple[list[dict], list[str], bool]:
+    """Fetch every source concurrently so one slow feed cannot block the rest.
+
+    Returns (items, errors, cancelled). Cancellation returns the sources that
+    already finished; in-flight fetches are abandoned (bounded by socket timeouts).
+    """
     items: list[dict] = []
     errors: list[str] = []
     if not sources:
-        return items, errors
+        return items, errors, False
     labels = [safe_text(str(source.get("name", "source")), 100) for source in sources]
     executor = ThreadPoolExecutor(max_workers=min(COLLECT_WORKERS, len(sources)), thread_name_prefix="fetch")
+    cancelled = False
     try:
         futures = {executor.submit(fetch_source, source): index for index, source in enumerate(sources)}
-        _, pending = wait(futures, timeout=budget)
+        deadline = time.monotonic() + budget
+        pending = set(futures)
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if cancel is not None and cancel.is_set():
+                cancelled = True
+                break
+            _, pending = wait(pending, timeout=min(0.25, remaining), return_when=FIRST_COMPLETED)
         for future, index in futures.items():
             if future in pending:
-                errors.append(f"{labels[index]}: 수집 시간이 초과되어 건너뛰었습니다.")
+                errors.append(f"{labels[index]}: {'취소되어 건너뛰었습니다.' if cancelled else '수집 시간이 초과되어 건너뛰었습니다.'}")
                 continue
             try:
                 items.extend(future.result())
@@ -869,7 +911,7 @@ def collect_sources(sources: list[dict], budget: float = COLLECT_BUDGET_SECONDS)
                 errors.append(f"{labels[index]}: {safe_text(_fetch_error_reason(exc), 200)}")
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
-    return items, errors
+    return items, errors, cancelled
 
 
 def handle(request: dict) -> dict:
@@ -899,7 +941,11 @@ def handle(request: dict) -> dict:
             if isinstance(source, dict) and source.get("enabled")
             and ("community" if source.get("kind") == "community" else "news") == stream
         ]
-        items, errors = collect_sources(selected)
+        cancel = _register_cancel(request.get("request_id"))
+        try:
+            items, errors, cancelled = collect_sources(selected, cancel=cancel)
+        finally:
+            _release_cancel(request.get("request_id"))
         personalization = request.get("personalization", {})
         if not isinstance(personalization, dict):
             personalization = {}
@@ -907,7 +953,11 @@ def handle(request: dict) -> dict:
         candidates = build_candidates(items, personalization, set(excluded_hashes), negative_rules, negative_stats)
         for candidate in candidates:
             candidate["event_id"] = f"{stream}-{candidate['event_id']}"
-        return {"ok": True, "op": op, "stream": stream, "negative_stats": negative_stats, "candidates": candidates, "message": f"수집 {len(items)}건 → 후보 {len(candidates)}건", "errors": errors}
+        message = f"수집 {len(items)}건 → 후보 {len(candidates)}건" + (" (취소됨: 받은 소스까지만 반영)" if cancelled else "")
+        return {"ok": True, "op": op, "stream": stream, "negative_stats": negative_stats, "candidates": candidates, "message": message, "errors": errors, "cancelled": cancelled}
+    if op == "cancel":
+        target = request.get("target")
+        return {"ok": True, "op": op, "cancelled": cancel_request(target)}
     if op == "analyze":
         candidates = request.get("candidates", [])
         if not isinstance(candidates, list) or len(candidates) > 15:

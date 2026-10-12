@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CATEGORIES, COMMUNITY_SOURCES, DEFAULT_SOURCES } from "../storage";
+import { youtubeChannelId, youtubeFeedUrl } from "../youtube";
 import type { DeskBackup } from "../backup";
 import type { Source } from "../types";
 
@@ -19,8 +21,24 @@ export function SettingsNav({ section, onChange }: { section: SettingsSection; o
 }
 
 export function SourcesPanel({ sources, onChange }: { sources: Source[]; onChange: (update: (current: Source[]) => Source[]) => void }) {
+  const [youtubeInput, setYoutubeInput] = useState("");
+  const [youtubeCategory, setYoutubeCategory] = useState("버튜버·크리에이터");
+  const [youtubeStatus, setYoutubeStatus] = useState("");
   function update(index: number, patch: Partial<Source>) {
     onChange((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  }
+  function addYoutubeChannel() {
+    const channelId = youtubeChannelId(youtubeInput);
+    if (!channelId) {
+      setYoutubeStatus("채널 ID(UC로 시작하는 24자) 또는 youtube.com/channel/UC… 주소를 붙여 넣으세요. @핸들 주소는 채널 정보 → 공유 → 채널 ID 복사로 확인할 수 있습니다.");
+      return;
+    }
+    const url = youtubeFeedUrl(channelId);
+    if (sources.some((source) => source.url === url)) { setYoutubeStatus("이미 추가된 채널입니다."); return; }
+    if (sources.length >= 50) { setYoutubeStatus("소스는 최대 50개입니다."); return; }
+    onChange((current) => [...current, { name: `YouTube ${channelId.slice(0, 8)}…`, url, tier: "official", category: youtubeCategory, enabled: true }]);
+    setYoutubeInput("");
+    setYoutubeStatus("채널 피드를 추가했습니다. 소스명을 채널 이름으로 바꿔 두면 후보 카드에서 알아보기 쉽습니다.");
   }
   return (
     <main className="content narrow">
@@ -37,6 +55,14 @@ export function SourcesPanel({ sources, onChange }: { sources: Source[]; onChang
             <button className="secondary" onClick={() => onChange((current) => [...current, { name: `새 피드 ${current.length + 1}`, url: "https://", tier: "approved_feed", category: "사회·생활", enabled: false }])}>소스 추가</button>
           </div>
         </div>
+        <div className="youtube-add">
+          <input value={youtubeInput} placeholder="YouTube 채널 ID 또는 youtube.com/channel/UC… 주소" aria-label="YouTube 채널" onChange={(e) => setYoutubeInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addYoutubeChannel(); } }} />
+          <select aria-label="YouTube 채널 카테고리" value={youtubeCategory} onChange={(e) => setYoutubeCategory(e.target.value)}>
+            {CATEGORIES.slice(1).map((c) => <option key={c}>{c}</option>)}
+          </select>
+          <button className="secondary" onClick={addYoutubeChannel}>YouTube 채널 추가</button>
+        </div>
+        <p className="inline-status">YouTube가 공식 제공하는 채널 Atom 피드를 로그인 없이 읽습니다. 새 영상 제목·설명·링크만 수집하며 댓글이나 통계는 가져오지 않습니다.{youtubeStatus ? ` ${youtubeStatus}` : ""}</p>
         <div className="source-list">
           {sources.map((source, index) => (
             <div className="source-row" key={`${source.name}-${index}`}>

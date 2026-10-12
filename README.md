@@ -1,4 +1,4 @@
-# Signal Desk — Secure Desktop v0.4
+# Signal Desk — Secure Desktop v0.5
 
 Signal Desk is a local-first Windows desktop prototype for broadcast-news curation.
 
@@ -144,4 +144,14 @@ Returned candidates retain their pre-penalty score and penalty explanation; coll
 - The sidecar debug log rotates at 1 MB.
 - The React UI is split into `src/storage.ts` and `src/components/` (candidate card, prep, archive, settings panels, excluded list, update modal); `App.tsx` keeps state and handlers only. The header version comes from `package.json` at build time.
 - Every GitHub Action is pinned to a commit SHA. A new weekly `live-check` workflow collects from the real default feeds and community pages and fails when a community parser returns nothing or most RSS feeds stop responding, so site layout changes are noticed early.
-- Known remaining work: saved articles still live in WebView `localStorage`; moving them to a file-backed store is planned for a later release because it changes the on-disk data location.
+
+## v0.5.0: file-backed data, cancel, shortcuts, YouTube feeds, cue sheets
+
+- **Data file.** All app data now lives in one JSON document under the per-user app data folder (`%LOCALAPPDATA%\com.signaldesk.desktop\signal-desk\state.json`), written atomically. It survives WebView cache clears and has no browser quota; the saved-article cap rises to 5,000. Existing installs migrate from `localStorage` automatically on first launch; the backup format (v1) is unchanged. Restoring a backup writes the file first and only then replaces what is on screen.
+- **Cancel collection.** While a collection runs, 「중단하고 지금까지로」 asks the sidecar to stop waiting and build candidates from the sources that already answered. The sidecar supports a `cancel` request targeting a running `collect` by request ID.
+- **Keyboard shortcuts** on the news and community lists (outside text fields): `J`/`K` or arrows move the cursor, `X` rejects, `S` toggles interest, `B` toggles broadcast prep, `C` toggles the exclusion checkbox, `O`/Enter opens the original.
+- **YouTube channel feeds.** Settings → 뉴스 소스 has a field for a channel ID or `youtube.com/channel/UC…` URL; it adds YouTube's official per-channel Atom feed as an `official` source. Only titles, descriptions and watch links are collected through the normal HTTPS-only RSS path. `@handle` URLs cannot be resolved offline; copy the channel ID from the channel's share menu.
+- **Broadcast cue sheet.** The 방송 준비 tab can copy or save a markdown run sheet for the selected date: numbered stories ordered by score with source, link, summary, AI discussion points, caveats, labels and your notes.
+- The sidecar capability set adds scoped read/write for the app's own local-data directory only.
+
+Verification: `python -m unittest discover -s python/tests`, `node --test "tests/*.test.cjs"`, `npm run build`.
