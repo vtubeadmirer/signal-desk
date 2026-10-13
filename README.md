@@ -141,7 +141,7 @@ Returned candidates retain their pre-penalty score and penalty explanation; coll
 - The startup update check is skipped while `tauri.conf.json` still carries placeholder updater keys or endpoints.
 - The sidecar debug log rotates at 1 MB.
 - The React UI is split into `src/storage.ts` and `src/components/` (candidate card, prep, archive, settings panels, excluded list, update modal); `App.tsx` keeps state and handlers only. The header version comes from `package.json` at build time.
-- Every GitHub Action is pinned to a commit SHA. A new weekly `live-check` workflow collects from the real default feeds and community pages and fails when a community parser returns nothing or most RSS feeds stop responding, so site layout changes are noticed early.
+- Every GitHub Action is pinned to a commit SHA. A new weekly `live-check` workflow collects from the real default feeds and community pages and fails when most RSS feeds stop responding. Community results are reported as warnings on GitHub runners, because Korean community sites may block datacenter IPs and a runner cannot tell a block from a layout change; run `python scripts/live_check.py` from a Korean connection for the strict parser check.
 
 ## v0.5.0: file-backed data, cancel, shortcuts, YouTube feeds, cue sheets
 

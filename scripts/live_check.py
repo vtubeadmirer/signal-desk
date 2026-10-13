@@ -4,6 +4,7 @@ Run manually or from the scheduled live-check workflow. Exits non-zero when a
 community parser returns nothing (page layout probably changed) or when more
 than half of the RSS feeds fail, so breakage is noticed before users hit it.
 """
+import os
 import sys
 import time
 from pathlib import Path
@@ -38,7 +39,7 @@ COMMUNITY_SOURCES = [
 
 def run(label: str, sources: list[dict]) -> tuple[list[dict], list[str]]:
     started = time.monotonic()
-    items, errors = agent.collect_sources(sources)
+    items, errors, _cancelled = agent.collect_sources(sources)
     per_source = {}
     for item in items:
         per_source[item["source_name"]] = per_source.get(item["source_name"], 0) + 1
@@ -62,15 +63,34 @@ for i, item in enumerate(candidates[:20], 1):
     print(f"{i:02}. [{item['score']}] [{item['category']}] {item['title']} | {item['source_name']} | 출처 {item['source_count']}")
 
 failures = []
+warnings = []
 if len(news_errors) * 2 > len(NEWS_SOURCES):
     failures.append(f"RSS 피드 {len(news_errors)}/{len(NEWS_SOURCES)}개가 실패했습니다.")
-broken_communities = [s["name"] for s in COMMUNITY_SOURCES if not any(i["source_name"] == s["name"] for i in community_items)]
+
+# Korean community sites block or challenge many datacenter IPs, so a GitHub runner
+# cannot tell "site blocked us" from "page layout changed". On CI, and for plain
+# access errors anywhere, community problems are warnings; run this script from a
+# residential (Korean) connection for the strict parser check.
+ACCESS_MARKERS = ("HTTP 4", "HTTP 5", "연결하지 못했습니다", "응답이", "robots.txt")
+on_ci = bool(os.environ.get("GITHUB_ACTIONS"))
+broken_communities = []
+for source in COMMUNITY_SOURCES:
+    if any(item["source_name"] == source["name"] for item in community_items):
+        continue
+    reason = next((error.split(": ", 1)[1] for error in community_errors if error.startswith(source["name"] + ":")), "결과 없음")
+    access_problem = any(marker in reason for marker in ACCESS_MARKERS)
+    if on_ci or access_problem:
+        warnings.append(f"{source['name']}: {reason} ({'러너 IP 차단 가능' if on_ci else '접근 문제'})")
+    else:
+        broken_communities.append(f"{source['name']}: {reason}")
 if broken_communities:
     failures.append("커뮤니티 목록을 읽지 못했습니다 (페이지 구조 변경 가능): " + ", ".join(broken_communities))
 
+for warning in warnings:
+    print(f"\nWARNING {warning}")
 if failures:
     print("\nLIVE CHECK FAILED")
     for failure in failures:
         print(" - " + failure)
     sys.exit(1)
-print("\nLIVE CHECK PASSED")
+print("\nLIVE CHECK PASSED" + (" (커뮤니티 경고 있음)" if warnings else ""))
