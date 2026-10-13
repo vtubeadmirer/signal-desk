@@ -13,11 +13,16 @@ function load(file, deps, extraGlobals = {}) {
 }
 const rejections = load('src/rejections.ts', {});
 const watchlist = load('src/watchlist.ts', {});
-const backup = load('src/backup.ts', { './rejections': rejections, './watchlist': watchlist });
+const dictionary = JSON.parse(fs.readFileSync('shared/negative_topics.json', 'utf8'));
+const streamsForWeekly = load('src/streams.ts', { './watchlist': watchlist }, { Number });
+const negativeForWeekly = load('src/negativePreferences.ts', { '../shared/negative_topics.json': { default: dictionary }, './streams': streamsForWeekly });
+const weekly = load('src/weekly.ts', { './negativePreferences': negativeForWeekly, './rejections': rejections, './streams': streamsForWeekly }, { Boolean });
+const backup = load('src/backup.ts', { './rejections': rejections, './watchlist': watchlist, './weekly': weekly });
 const storage = load('src/storage.ts', { './rejections': rejections, './backup': backup }, { localStorage: { getItem: () => null } });
-const state = load('src/state.ts', { './rejections': rejections, './backup': backup, './storage': storage, './watchlist': watchlist });
+const state = load('src/state.ts', { './rejections': rejections, './backup': backup, './storage': storage, './watchlist': watchlist, './weekly': weekly });
 const streams = load('src/streams.ts', { './watchlist': watchlist });
-const cuesheet = load('src/cuesheet.ts', { './streams': streams });
+const historyForCue = load('src/history.ts', { './negativePreferences': negativeForWeekly, './rejections': rejections });
+const cuesheet = load('src/cuesheet.ts', { './streams': streams, './history': historyForCue });
 const youtube = load('src/youtube.ts', {});
 
 function candidate(overrides = {}) {
@@ -56,7 +61,7 @@ test('legacy localStorage layout migrates into one document and is detected only
 
 test('cue sheet lists only the selected date, highest score first, with notes and caveats', () => {
   const records = [
-    { id: 'a', candidate: candidate({ title: '둘째', score: 50, url: 'https://example.com/2', discussion_points: ['포인트 A'], caveats: ['확인 필요'] }), interested: false, labels: ['내 분류'], note: '첫 줄\n둘째 줄', broadcastDates: ['2026-10-13'], savedAt: '', updatedAt: '' },
+    { id: 'a', candidate: candidate({ title: '둘째', score: 50, url: 'https://example.com/2', discussion_points: ['포인트 A'], caveats: ['확인 필요'], talk: { profile: 'debate', intro: '의견이 갈림', keyword: '둘째', questions: ['채팅은 어느 쪽?'], poll: { question: '찬성?', options: ['네', '아니오'] } } }), interested: false, labels: ['내 분류'], note: '첫 줄\n둘째 줄', broadcastDates: ['2026-10-13'], savedAt: '', updatedAt: '' },
     { id: 'b', candidate: candidate({ title: '첫째', score: 90, url: 'https://example.com/1', source_type: 'community', content_type: 'community' }), interested: false, labels: [], note: '', broadcastDates: ['2026-10-13'], savedAt: '', updatedAt: '' },
     { id: 'c', candidate: candidate({ title: '다른 날', url: 'https://example.com/3' }), interested: false, labels: [], note: '', broadcastDates: ['2026-10-20'], savedAt: '', updatedAt: '' },
   ];
@@ -68,6 +73,9 @@ test('cue sheet lists only the selected date, highest score first, with notes an
   assert.ok(text.includes('  - 포인트 A'));
   assert.ok(text.includes('- 방송 전 확인:'));
   assert.ok(text.includes('- 메모: 첫 줄 / 둘째 줄'));
+  assert.ok(text.includes('- 채팅에 던질 질문 (의견이 갈림):'));
+  assert.ok(text.includes('  - 채팅은 어느 쪽?'));
+  assert.ok(text.includes('- 투표: 찬성? 1 네  2 아니오'));
   assert.ok(text.includes('- 내 분류: 내 분류'));
   assert.ok(cuesheet.buildCueSheet([], '2026-10-13').includes('담긴 기사가 없습니다'));
 });

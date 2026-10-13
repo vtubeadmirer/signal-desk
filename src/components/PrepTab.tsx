@@ -4,7 +4,9 @@ import { candidateStream, type SavedStream } from "../streams";
 import { summaryPreview } from "../storage";
 import { buildCueSheet } from "../cuesheet";
 import { saveCueSheetFile } from "../backupFiles";
-import type { ArticleRecord } from "../types";
+import type { ArticleRecord, Reaction } from "../types";
+import { segmentOf, segmentMinutes } from "../cuesheet";
+import { shiftDate } from "../weekly";
 import { SavedStreamFilter } from "./SavedStreamFilter";
 
 export function PrepTab({ savedArticles, selectedBroadcastDate, onDateChange, savedStream, onSavedStreamChange, updateRecord, removeLabel, goToNews }: {
@@ -70,6 +72,7 @@ export function PrepTab({ savedArticles, selectedBroadcastDate, onDateChange, sa
             <div className="signal-meta">
               <span className="badge">{candidateStream(record.candidate) === "news" ? "일반 뉴스" : "커뮤니티·밈"}</span>
               <span className="badge">{record.candidate.category}</span>
+              <span className="badge">{segmentOf(record.candidate)} · 약 {segmentMinutes(record.candidate)}분</span>
               <span className="decision candidate">점수 {record.candidate.score}</span>
             </div>
             <h2>{record.candidate.title}</h2>
@@ -92,6 +95,21 @@ export function PrepTab({ savedArticles, selectedBroadcastDate, onDateChange, sa
                 onChange={(event) => updateRecord(record.id, (current) => ({ ...current, note: event.target.value }))}
               />
             </label>
+            <div className="reaction-row" aria-label="방송 후 반응">
+              <span>방송 후 반응:</span>
+              {([["hot", "터짐"], ["flat", "보통"], ["skipped", "안 다룸"]] as [Reaction, string][]).map(([value, label]) => {
+                const active = record.reactions?.[selectedBroadcastDate] === value;
+                return <button key={value} className={active ? `filter active ${value}` : "filter"} aria-pressed={active} onClick={() => updateRecord(record.id, (current) => {
+                  const next = { ...(current.reactions ?? {}) };
+                  if (active) delete next[selectedBroadcastDate]; else next[selectedBroadcastDate] = value;
+                  return { ...current, reactions: next };
+                })}>{label}</button>;
+              })}
+              {record.reactions?.[selectedBroadcastDate] === "skipped" && !record.broadcastDates.includes(shiftDate(selectedBroadcastDate, 1)) && (
+                <button className="secondary" onClick={() => updateRecord(record.id, (current) => ({ ...current, broadcastDates: [...current.broadcastDates, shiftDate(selectedBroadcastDate, 1)].sort() }))}>다음 날로 이월</button>
+              )}
+              <small>터짐은 다음 수집의 관심 주제 가산점에, 안 다룸은 가산점 제외와 「오늘의 토크」 맨 앞 이월에 반영됩니다.</small>
+            </div>
             <div className="card-footer">
               <span>{record.candidate.source_name}</span>
               <div className="saved-card-actions">

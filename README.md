@@ -1,4 +1,4 @@
-# Signal Desk — Secure Desktop v0.6
+# Signal Desk — Secure Desktop v0.7
 
 Signal Desk is a local-first Windows desktop prototype for broadcast-news curation.
 
@@ -161,5 +161,20 @@ Verification: `python -m unittest discover -s python/tests`, `node --test "tests
 - **Snapshots**: on launch the app writes a dated copy of its data file to `signal-desk\snapshots\` (one per day; a tagged copy right after the localStorage migration) and keeps the newest seven.
 - **Release signing**: the updater public key and endpoint are set, so the in-app update check is active. The release workflow now requires only the updater private key; Windows code signing is optional until a certificate exists.
 - Capability: `fs:allow-read-dir` for snapshot pruning inside the app's own data folder.
+
+Verification: `python -m unittest discover -s python/tests`, `node --test "tests/*.test.cjs"`, `npm run build`.
+
+## v0.7.0: just-chatting topic engine
+
+Direction and ranking came from a nine-agent ideation pass recorded in `docs/JUSTCHAT_ROADMAP.md`. This release ships the first two stages of its recommended order plus the highest-scored small items.
+
+- **채팅 질문·투표 (AI 없이).** Every candidate now carries a `talk` block computed by the sidecar from `shared/talk_angles.json`: an engagement profile (토론형 / 공감형 / 정보형, from community comment-to-recommendation ratios or news frames), two to three chat questions and one poll in the "질문? 1 보기 2 보기" shape chat polls accept. Selection is deterministic per article. Cards show the block with a 「복사」 button for the poll; the cue sheet includes it. No Codex needed. Codex `discussion_points` still appear alongside when analysis ran.
+- **오늘의 토크 탭 + 방송 전 루틴.** A new first tab picks five stories from all candidates (carried-over 「못 다룸」 stories → watchlist → one follow-up slot → at least one community story → score; two per category; already-aired stories skipped), each with its reason, questions and poll. 「방송 전 루틴 실행」 collects 뉴스 → 커뮤니티 and rebuilds the picks; 「모두 담기」 fills the broadcast date; 「교체」 swaps a pick; 「브리핑 복사」 exports markdown; digit keys 1–5 open originals. Settings → 방송 전 루틴 can start the routine automatically on launch.
+- **지난 방송 후속.** A newer article on a story aired within 14 days shows 「후속 · MM/DD 방송」 instead of 「이미 방송」, with the earlier note collapsed under it; the news tab has a 「지난 방송 후속 N」 filter; the cue sheet adds an 「이어서」 line.
+- **수집 기록과 주간 흐름 탭.** Each collection logs its top candidates (30 days, 2,000 lines, in the state file and backups). Cards show 「N일째 화제」 for names seen three or more days this week. The 주간 흐름 tab lists persistent, rising and new names, this week's aired stories and strong candidates never picked up (with 「방송 준비에 담기」), and copies or saves a weekly recap markdown for an 「이번 주 정리」 segment. Settings suggests recurring names for the watchlist.
+- **방송 후 반응.** On the 방송 준비 tab each story takes 터짐 / 보통 / 안 다룸 for the selected date. 터짐 feeds extra title keywords into personalization, 안 다룸 and 보통 stop feeding it, 안 다룸 offers 「다음 날로 이월」 and leads the next briefing. Similar candidates later show 「지난번 반응 좋았음」. Reactions are optional fields in the state file and backup format v1.
+- **코너별 큐시트.** The cue sheet groups stories into 뉴스 브리핑 → 밈 리뷰 → 사연·내 경험 → 찬반 토론 with minutes per corner and a total; the 방송 준비 cards show the corner.
+- **채팅 터질 순.** A sort toggle on the news and community tabs ranks by talkability, profile, comment volume and watchlist hits instead of score.
+- Deliberately not done, per the judges: tray/scheduler (needs Rust and shell access), AI schema extension (Codex strict output schemas), conditional-GET cache, positive rule learning (filter-bubble risk until reactions accumulate).
 
 Verification: `python -m unittest discover -s python/tests`, `node --test "tests/*.test.cjs"`, `npm run build`.

@@ -52,7 +52,13 @@ test('prior broadcast is found by url, exact title, or strong topic overlap with
     { id: 'c', candidate: candidate(3, { title: '저장만 하고 방송 안 함 페이커 기념우표' }), interested: true, labels: [], note: '', broadcastDates: [], savedAt: '', updatedAt: '' },
   ];
   const today = '2026-10-13';
-  assert.equal(JSON.stringify(history.findPriorBroadcast({ url: 'https://news.example/story#x', title: '다른 제목' }, records, today)), JSON.stringify({ date: '2026-10-10', title: '페이커 기념우표 발행 일정 공식 발표', reason: 'url' }));
+  const byUrl = history.findPriorBroadcast({ url: 'https://news.example/story#x', title: '다른 제목' }, records, today);
+  assert.equal(JSON.stringify([byUrl.date, byUrl.reason, byUrl.followUp]), JSON.stringify(['2026-10-10', 'url', false]));
+  const newer = history.findPriorBroadcast({ url: 'https://other.example/9', title: '페이커 기념우표 발행 23일 확정', published_at: '2026-10-12T09:00:00Z' }, records, today);
+  assert.equal(newer.reason, 'topic');
+  assert.equal(newer.followUp, true, 'a newer article on an aired topic is a follow-up');
+  const older = history.findPriorBroadcast({ url: 'https://other.example/9', title: '페이커 기념우표 발행 23일 확정', published_at: '2026-10-09T09:00:00Z' }, records, today);
+  assert.equal(older.followUp, false, 'an article older than the broadcast is a repeat, not a follow-up');
   assert.equal(history.findPriorBroadcast({ url: 'https://other.example/1', title: '페이커 기념우표 발행 일정 공식 발표!' }, records, today).reason, 'title');
   assert.equal(history.findPriorBroadcast({ url: 'https://other.example/2', title: '페이커 기념우표 발행 23일 확정' }, records, today).reason, 'topic');
   assert.equal(history.findPriorBroadcast({ url: 'https://other.example/3', title: '오래된 기사 제목입니다' }, records, today), null, 'outside the 14-day window');

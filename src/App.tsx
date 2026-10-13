@@ -11,6 +11,13 @@ import { CATEGORIES, COMMUNITY_SOURCES, articleId, isSavedArticle } from "./stor
 import { flushState, saveState, writeSnapshot } from "./persist";
 import { findPriorBroadcast } from "./history";
 import { watchMatches } from "./watchlist";
+import { appendRun, persistentHit, persistentTerms, suggestWatchTerms, type CollectionEntry } from "./weekly";
+import { preferenceTokens } from "./negativePreferences";
+import { type PriorBroadcast } from "./history";
+import { type SortMode } from "./streams";
+import { WeeklyTab } from "./components/WeeklyTab";
+import { BriefingTab } from "./components/BriefingTab";
+import { buildBriefing, type Briefing } from "./briefing";
 import { localDateKey } from "./storage";
 import type { DeskState } from "./state";
 import type { ArticleRecord, Candidate, PersonalizationProfile, Source } from "./types";
@@ -21,7 +28,7 @@ import { PrepTab } from "./components/PrepTab";
 import { BackupPanel, RulesPanel, SecurityPanel, SettingsNav, SourcesPanel, type SettingsSection } from "./components/SettingsPanels";
 import { UpdateModal } from "./components/UpdateModal";
 
-type Tab = "today" | "community" | "prep" | "archive" | "settings";
+type Tab = "briefing" | "today" | "community" | "weekly" | "prep" | "archive" | "settings";
 
 export default function App({ initial, migrated, loadError }: { initial: DeskState; migrated: boolean; loadError?: string }) {
   const [tab, setTab] = useState<Tab>("today");
@@ -45,6 +52,14 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   const [selectedBroadcastDate, setSelectedBroadcastDate] = useState(initial.selectedBroadcastDate);
   const [communityPresetsApplied, setCommunityPresetsApplied] = useState(initial.communityPresetsApplied);
   const [watchlist, setWatchlist] = useState<string[]>(initial.watchlist);
+  const [collectionLog, setCollectionLog] = useState<CollectionEntry[]>(initial.collectionLog);
+  const [routineOnLaunch, setRoutineOnLaunch] = useState(initial.routineOnLaunch);
+  const [briefingOverride, setBriefingOverride] = useState<Briefing | null>(null);
+  const today = localDateKey();
+  const weeklyTerms = useMemo(() => persistentTerms(collectionLog, today), [collectionLog, today]);
+  const watchSuggestions = useMemo(() => suggestWatchTerms(collectionLog, watchlist, today), [collectionLog, watchlist, today]);
+  const [sortMode, setSortMode] = useState<SortMode>("score");
+  const [followUpsOnly, setFollowUpsOnly] = useState(false);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
   const [archiveQuery, setArchiveQuery] = useState("");
@@ -77,8 +92,8 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   }, [communityPresetsApplied]);
 
   const persisted = useMemo<DeskState>(() => ({
-    version: 1, sources, provider, articles: savedArticles, rejectedItems, rejectionLearning: learning, selectedBroadcastDate, communityPresetsApplied, watchlist,
-  }), [sources, provider, savedArticles, rejectedItems, learning, selectedBroadcastDate, communityPresetsApplied, watchlist]);
+    version: 1, sources, provider, articles: savedArticles, rejectedItems, rejectionLearning: learning, selectedBroadcastDate, communityPresetsApplied, watchlist, collectionLog, routineOnLaunch,
+  }), [sources, provider, savedArticles, rejectedItems, learning, selectedBroadcastDate, communityPresetsApplied, watchlist, collectionLog, routineOnLaunch]);
   useEffect(() => {
     // Safety copies: one tagged snapshot right after a migration, and one per day on launch.
     const today = localDateKey();
@@ -109,6 +124,8 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     // The release scaffold ships placeholder updater keys; asking GitHub for a
     // non-existent manifest on every launch is pointless until they are set.
     if (__UPDATER_CONFIGURED__) void checkForUpdate();
+    if (initial.routineOnLaunch) void runRoutine();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function checkForUpdate() {
@@ -130,10 +147,16 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     }
   }
 
-  const filtered = useMemo(() => {
-    return streamCandidates(learnedCandidates.filter((item) => !isRejected(item, rejectedIndex)), stream, filter, watchlist);
-  }, [learnedCandidates, stream, filter, rejectedIndex, watchlist]);
   const broadcastRecords = useMemo(() => savedArticles.filter((record) => record.broadcastDates.length > 0), [savedArticles]);
+  const ranked = useMemo(() => {
+    return streamCandidates(learnedCandidates.filter((item) => !isRejected(item, rejectedIndex)), stream, filter, watchlist, sortMode);
+  }, [learnedCandidates, stream, filter, rejectedIndex, watchlist, sortMode]);
+  const priorByEvent = useMemo(() => new Map(ranked.map((item) => [item.event_id, findPriorBroadcast(item, broadcastRecords, today)] as [string, PriorBroadcast | null])), [ranked, broadcastRecords, today]);
+  const followUpCount = useMemo(() => ranked.filter((item) => priorByEvent.get(item.event_id)?.followUp).length, [ranked, priorByEvent]);
+  const filtered = useMemo(() => followUpsOnly ? ranked.filter((item) => priorByEvent.get(item.event_id)?.followUp) : ranked, [ranked, followUpsOnly, priorByEvent]);
+  const autoBriefing = useMemo(() => buildBriefing(learnedCandidates.filter((item) => !isRejected(item, rejectedIndex)), savedArticles, watchlist, today), [learnedCandidates, rejectedIndex, savedArticles, watchlist, today]);
+  const briefing = briefingOverride ?? autoBriefing;
+  useEffect(() => { setBriefingOverride(null); }, [learnedCandidates]);
 
   const visibleCandidates = showMoreCandidates ? filtered : filtered.slice(0, 10);
   const checkedCandidates = learnedCandidates.filter((item) => candidateStream(item) === stream && !isRejected(item, rejectedIndex) && checkedIds.includes(rejectionId(item.url)));
@@ -188,8 +211,13 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   }
 
   const personalization = useMemo<PersonalizationProfile>(() => {
+    // Latest recorded reaction decides: "skipped"/"flat" stories stop feeding positive signals, "hot" ones feed more of them.
+    const latestReaction = (record: ArticleRecord) => {
+      const dates = Object.keys(record.reactions ?? {}).sort();
+      return dates.length ? record.reactions![dates[dates.length - 1]] : null;
+    };
     const chosen = savedArticles.filter((record) => candidateStream(record.candidate) === stream && !isRejected(record.candidate, rejectedIndex) && negativePenalty(record.candidate, activeRules).penalty < 40).filter((record) =>
-      record.interested || record.broadcastDates.length > 0 || record.labels.length > 0
+      (record.interested || record.broadcastDates.length > 0 || record.labels.length > 0) && !(latestReaction(record) === "skipped" || (latestReaction(record) === "flat" && !record.interested))
     );
     const keywords = new Set<string>();
     const categories = new Set<string>();
@@ -197,6 +225,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
 
     for (const record of chosen) {
       categories.add(record.candidate.category);
+      if (latestReaction(record) === "hot") for (const token of preferenceTokens(record.candidate.title)) keywords.add(token);
       for (const keyword of record.candidate.keywords ?? []) {
         if (keyword.trim()) keywords.add(keyword.trim());
       }
@@ -304,16 +333,20 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     updateRecord(id, (record) => ({ ...record, labels: record.labels.filter((value) => value !== label) }));
   }
 
-  async function runCollection() {
+  async function runCollection(target: SignalStream = stream): Promise<boolean> {
+    const label = target === "news" ? "일반 뉴스" : "커뮤니티·밈";
+    const targetSources = sources.filter((source) => source.enabled && sourceStream(source) === target);
+    if (!targetSources.length) { setStatus(`${label} 소스가 없어 수집을 건너뜁니다.`); return false; }
     setRunning(true);
     setCollecting(true);
-    setStatus(`${streamLabel} 수집 및 후보 선별 중…`);
+    setStatus(`${label} 수집 및 후보 선별 중…`);
     try {
-      const r = await collect(activeSources, personalization, stream, await exclusionHashes(rejectedItems), activeRules.filter((rule) => rule.stream === stream), watchlist);
+      const r = await collect(targetSources, personalization, target, await exclusionHashes(rejectedItems), activeRules.filter((rule) => rule.stream === target), watchlist);
       if (!r.ok) throw new Error(r.error ?? "수집 실패");
       const freshCandidates = r.candidates ?? [];
-      setCandidates((current) => replaceStream(current, freshCandidates, stream));
-      const previousIds = candidates.filter((item) => candidateStream(item) === stream).map((item) => rejectionId(item.url));
+      setCandidates((current) => replaceStream(current, freshCandidates, target));
+      setCollectionLog((current) => appendRun(current, freshCandidates, target, localDateKey()));
+      const previousIds = candidates.filter((item) => candidateStream(item) === target).map((item) => rejectionId(item.url));
       setCheckedIds((current) => current.filter((id) => !previousIds.includes(id)));
       setSavedArticles((current) => {
         const freshById = new Map(freshCandidates.map((item) => [articleId(item.url), item]));
@@ -324,17 +357,29 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
             : record;
         });
       });
-      setShowMoreCandidates(false);
-      setLastRun(new Date().toLocaleString("ko-KR"));
+      setExpanded((current) => ({ ...current, [target]: false }));
+      setLastRuns((current) => ({ ...current, [target]: new Date().toLocaleString("ko-KR") }));
       setFocusedId(null);
-      setStatus(`${streamLabel} 후보 ${r.candidates?.length ?? 0}개를 만들었습니다.${r.cancelled ? " 중단 요청으로 받은 소스까지만 반영했습니다." : ""}${r.negative_stats ? ` 제외 성향으로 ${r.negative_stats.suppressed}건 제외 · ${r.negative_stats.demoted}건 감점.` : ""}${r.errors?.length ? ` 수집 실패: ${r.errors.join(" / ")}` : ""}`);
+      setFollowUpsOnly(false);
+      setStatus(`${label} 후보 ${r.candidates?.length ?? 0}개를 만들었습니다.${r.cancelled ? " 중단 요청으로 받은 소스까지만 반영했습니다." : ""}${r.negative_stats ? ` 제외 성향으로 ${r.negative_stats.suppressed}건 제외 · ${r.negative_stats.demoted}건 감점.` : ""}${r.errors?.length ? ` 수집 실패: ${r.errors.join(" / ")}` : ""}`);
+      return true;
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "수집 중 오류가 발생했습니다.");
+      return false;
     } finally {
       setCollecting(false);
       setRunning(false);
       await refreshHealth();
     }
+  }
+
+  /** 방송 전 루틴: 뉴스 → 커뮤니티 수집, then land on the briefing with today's picks. */
+  async function runRoutine() {
+    setTab("briefing");
+    const news = await runCollection("news");
+    const community = await runCollection("community");
+    setBriefingOverride(null);
+    if (news || community) setStatus("오늘의 토크를 골랐습니다. 마음에 안 드는 항목은 「교체」, 전부 좋으면 「모두 담기」.");
   }
 
   async function runAiAnalysis() {
@@ -361,7 +406,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   }
 
   function backupData() {
-    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate, rejectedItems, rejectionLearning: learning, watchlist };
+    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate, rejectedItems, rejectionLearning: learning, watchlist, collectionLog, routineOnLaunch };
   }
 
   async function exportBackup() {
@@ -399,8 +444,12 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
         selectedBroadcastDate: pendingBackup.selectedBroadcastDate,
         communityPresetsApplied: true,
         watchlist: pendingBackup.watchlist ?? [],
+        collectionLog: pendingBackup.collectionLog ?? [],
+        routineOnLaunch: pendingBackup.routineOnLaunch ?? false,
       });
+      setRoutineOnLaunch(pendingBackup.routineOnLaunch ?? false);
       setWatchlist(pendingBackup.watchlist ?? []);
+      setCollectionLog(pendingBackup.collectionLog ?? []);
       setSavedArticles(pendingBackup.articles);
       setRejectedItems(pendingBackup.rejectedItems ?? []);
       setLearning(pendingBackup.rejectionLearning ?? DEFAULT_LEARNING);
@@ -423,6 +472,20 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
 
   // --- Keyboard navigation on the candidate list -------------------------------------------
   const focusedIndex = focusedId ? visibleCandidates.findIndex((item) => item.event_id === focusedId) : -1;
+  useEffect(() => {
+    if (tab !== "briefing") return;
+    function onDigit(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      const n = Number(event.key);
+      if (!Number.isInteger(n) || n < 1 || n > briefing.picks.length) return;
+      event.preventDefault();
+      void openUrl(briefing.picks[n - 1].item.url);
+    }
+    window.addEventListener("keydown", onDigit);
+    return () => window.removeEventListener("keydown", onDigit);
+  });
   useEffect(() => {
     if (tab !== "today" && tab !== "community") return;
     function onKey(event: KeyboardEvent) {
@@ -472,7 +535,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
       </header>
 
       <nav className="tabs">
-        {([["today", "일반 뉴스"], ["community", "커뮤니티·밈"], ["prep", "방송 준비"], ["archive", "보관함"], ["settings", "환경설정"]] as [Tab, string][]).map(([value, label]) => (
+        {([["briefing", "오늘의 토크"], ["today", "일반 뉴스"], ["community", "커뮤니티·밈"], ["weekly", "주간 흐름"], ["prep", "방송 준비"], ["archive", "보관함"], ["settings", "환경설정"]] as [Tab, string][]).map(([value, label]) => (
           <button key={value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>{label}</button>
         ))}
       </nav>
@@ -487,7 +550,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
             </div>
             <div className="hero-actions">
               <button className="secondary" onClick={() => { setTab("settings"); setSettingsSection("backup"); }}>백업·복원</button>
-              <button className="primary" disabled={running || activeSources.length === 0} onClick={runCollection}>
+              <button className="primary" disabled={running || activeSources.length === 0} onClick={() => void runCollection()}>
                 {running ? "처리 중…" : stream === "news" ? "뉴스 가져오기" : "커뮤니티 소식 가져오기"}
               </button>
               {collecting && <button className="secondary" onClick={() => void cancelRunningCollection()}>중단하고 지금까지로</button>}
@@ -518,6 +581,10 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
                 <button key={category} className={filter === category ? "filter active" : "filter"} onClick={() => { setFilter(category); setShowMoreCandidates(false); }}>{category}</button>
               ))}
             </div>
+            <div className="view-toggles">
+              <button className={sortMode === "chat" ? "filter active" : "filter"} aria-pressed={sortMode === "chat"} title="대화성·토론형·댓글 수·워치리스트를 합산한 순서" onClick={() => setSortMode(sortMode === "chat" ? "score" : "chat")}>채팅 터질 순</button>
+              <button className={followUpsOnly ? "filter active" : "filter"} aria-pressed={followUpsOnly} disabled={!followUpCount && !followUpsOnly} title="최근 14일 안에 방송한 이야기의 새 기사만" onClick={() => setFollowUpsOnly(!followUpsOnly)}>지난 방송 후속 {followUpCount}</button>
+            </div>
             <div className="run-info">{lastRun ? `마지막 실행 ${lastRun}` : status}</div>
           </section>
 
@@ -545,7 +612,8 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
                   checked={checkedIds.includes(rejectionId(item.url))}
                   focused={item.event_id === focusedId}
                   watchHits={watchMatches(item, watchlist)}
-                  priorBroadcast={findPriorBroadcast(item, broadcastRecords, localDateKey())}
+                  priorBroadcast={priorByEvent.get(item.event_id) ?? null}
+                  persistent={persistentHit(item, weeklyTerms)}
                   selectedBroadcastDate={selectedBroadcastDate}
                   labelDraft={labelDrafts[id] ?? ""}
                   onToggleChecked={() => toggleChecked(rejectionId(item.url))}
@@ -567,6 +635,43 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
             </div>
           )}
         </main>
+      )}
+
+      {tab === "briefing" && (
+        <BriefingTab
+          briefing={briefing}
+          onBriefingChange={setBriefingOverride}
+          date={selectedBroadcastDate}
+          running={running}
+          hasCandidates={candidates.length > 0}
+          isPlanned={(item) => Boolean(savedById.get(articleId(item.url))?.broadcastDates.includes(selectedBroadcastDate))}
+          onAddOne={(item) => toggleBroadcastDate(item)}
+          onAddAll={(items) => { for (const item of items) if (!savedById.get(articleId(item.url))?.broadcastDates.includes(selectedBroadcastDate)) toggleBroadcastDate(item); setStatus(`${items.length}개를 ${selectedBroadcastDate} 방송 준비에 담았습니다.`); }}
+          onRunRoutine={() => void runRoutine()}
+          goToPrep={() => setTab("prep")}
+          goToNews={() => setTab("today")}
+        />
+      )}
+
+      {tab === "weekly" && (
+        <WeeklyTab
+          log={collectionLog}
+          records={savedArticles}
+          today={today}
+          goToNews={() => setTab("today")}
+          onAddToPrep={(entry) => {
+            // Rebuild a minimal candidate from the log line so it can live in the archive like any other saved story.
+            const stub: Candidate = {
+              priority: 0, slide_order: 0, category: entry.category, event_id: `${entry.stream}-log-${entry.id}`, decision: entry.stream === "community" ? "manual_review" : "candidate",
+              content_type: entry.stream === "community" ? "community" : "news", source_type: entry.stream === "community" ? "community" : "media",
+              collection_method: entry.stream === "community" ? "public_list" : "rss", usage_status: "review_required", score: entry.score, score_raw: 0,
+              talkability: 0, verification_cost: 50, source_ready: true, context_required: 30, title: entry.title, summary: "주간 흐름의 수집 기록에서 담은 기사입니다. 원문에서 내용을 확인하세요.",
+              source_name: "", url: entry.url, published_at: `${entry.date}T00:00:00+09:00`, keywords: [], source_count: entry.source_count, frames: [],
+            };
+            toggleBroadcastDate(stub);
+            setTab("prep");
+          }}
+        />
       )}
 
       {tab === "prep" && (
@@ -631,7 +736,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
         />
       )}
       {tab === "settings" && settingsSection === "sources" && <SourcesPanel sources={sources} onChange={setSources} />}
-      {tab === "settings" && settingsSection === "rules" && <RulesPanel watchlist={watchlist} onWatchlistChange={setWatchlist} />}
+      {tab === "settings" && settingsSection === "rules" && <RulesPanel watchlist={watchlist} onWatchlistChange={setWatchlist} suggestions={watchSuggestions} routineOnLaunch={routineOnLaunch} onRoutineOnLaunchChange={setRoutineOnLaunch} />}
       {tab === "settings" && settingsSection === "security" && <SecurityPanel />}
 
       {availableUpdate && (

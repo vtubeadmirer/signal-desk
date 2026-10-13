@@ -1,15 +1,25 @@
 import { preferenceTokens } from "./negativePreferences";
 import { normalizedTitle, rejectionId } from "./rejections";
-import type { ArticleRecord, Candidate } from "./types";
+import type { ArticleRecord, Candidate, Reaction } from "./types";
 
-export type PriorBroadcast = { date: string; title: string; reason: "url" | "title" | "topic" };
+export type PriorBroadcast = {
+  date: string;
+  title: string;
+  reason: "url" | "title" | "topic";
+  /** Newer article on a story already aired: a follow-up rather than a repeat. */
+  followUp: boolean;
+  /** The note left on the earlier record, if any. */
+  note: string;
+  /** How that earlier broadcast landed, if the host recorded it. */
+  reaction: Reaction | null;
+};
 
 /**
  * Did this story (or one that reads like it) already go on air? Checks saved
  * records that carry broadcast dates: same URL, same normalized title, or a
  * strong token overlap within the last `windowDays`.
  */
-export function findPriorBroadcast(item: Pick<Candidate, "url" | "title">, records: ArticleRecord[], today: string, windowDays = 14): PriorBroadcast | null {
+export function findPriorBroadcast(item: Pick<Candidate, "url" | "title"> & { published_at?: string }, records: ArticleRecord[], today: string, windowDays = 14): PriorBroadcast | null {
   const id = rejectionId(item.url);
   const title = normalizedTitle(item.title);
   const tokens = new Set(preferenceTokens(item.title));
@@ -29,7 +39,9 @@ export function findPriorBroadcast(item: Pick<Candidate, "url" | "title">, recor
     if (!reason) continue;
     const rank = { url: 0, title: 1, topic: 2 };
     if (!best || rank[reason] < rank[best.reason] || (rank[reason] === rank[best.reason] && date > best.date)) {
-      best = { date, title: record.candidate.title, reason };
+      const publishedDay = (item.published_at ?? "").slice(0, 10);
+      const followUp = reason !== "url" && Boolean(publishedDay) && publishedDay > date;
+      best = { date, title: record.candidate.title, reason, followUp, note: record.note?.trim() ?? "", reaction: record.reactions?.[date] ?? null };
     }
   }
   return best;

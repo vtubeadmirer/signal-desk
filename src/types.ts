@@ -7,6 +7,15 @@ export type Source = {
   enabled: boolean;
 };
 
+/** Rule-based just-chatting angle computed by the sidecar (no AI). */
+export type TalkAngles = {
+  profile: "debate" | "empathy" | "info";
+  intro: string;
+  keyword: string;
+  questions: string[];
+  poll: { question: string; options: string[] } | null;
+};
+
 export type Candidate = {
   priority: number;
   slide_order: number;
@@ -39,6 +48,15 @@ export type Candidate = {
   frames: string[];
   engagement?: { recommendations: number; comments: number; views: number } | null;
   watch_matches?: string[];
+  talk?: TalkAngles;
+  /** Optional live-show fields from AI analysis (see schemas/analysis.schema.json). */
+  hook?: string;
+  chat_questions?: string[];
+  poll?: { question: string; options: string[] };
+  debate?: { pro: string; con: string };
+  personal_prompt?: string;
+  segment?: string;
+  talk_minutes?: number;
   why_now?: string;
   confirmed_facts?: string[];
   discussion_points?: string[];
@@ -67,6 +85,9 @@ export type PersonalizationProfile = {
   labels: string[];
 };
 
+/** How a story landed on air: recorded per broadcast date after the stream. */
+export type Reaction = "hot" | "flat" | "skipped";
+
 export type ArticleRecord = {
   id: string;
   candidate: Candidate;
@@ -76,4 +97,6 @@ export type ArticleRecord = {
   broadcastDates: string[];
   savedAt: string;
   updatedAt: string;
+  /** Keyed by broadcast date (YYYY-MM-DD). */
+  reactions?: Record<string, Reaction>;
 };

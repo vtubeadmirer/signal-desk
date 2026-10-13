@@ -1,7 +1,8 @@
-import { sourceValid } from "./backup";
+import { reactionsValid, sourceValid } from "./backup";
 import { DEFAULT_LEARNING, learningValid, rejectionValid, MAX_REJECTIONS, type LearningSettings, type RejectedItem } from "./rejections";
 import { ARTICLES_KEY, COMMUNITY_MIGRATION_KEY, DATE_KEY, DEFAULT_SOURCES, LEARNING_KEY, PROVIDER_KEY, REJECTIONS_KEY, STORAGE_KEY, localDateKey } from "./storage";
 import { watchlistValid } from "./watchlist";
+import { collectionEntryValid, pruneLog, type CollectionEntry } from "./weekly";
 import type { ArticleRecord, Source } from "./types";
 
 /** Everything Signal Desk persists between launches, as one document. */
@@ -17,6 +18,10 @@ export type DeskState = {
   communityPresetsApplied: boolean;
   /** Terms always pinned to the top of the candidate list. */
   watchlist: string[];
+  /** One line per top candidate per collection day; feeds the weekly view. */
+  collectionLog: CollectionEntry[];
+  /** Run 뉴스 → 커뮤니티 collection and build the briefing right after launch. */
+  routineOnLaunch: boolean;
 };
 
 export const MAX_ARTICLES = 5000;
@@ -26,7 +31,8 @@ const object = (value: unknown): value is Record<string, unknown> => typeof valu
 
 export function articleRecordValid(item: unknown): item is ArticleRecord {
   return object(item) && typeof item.id === "string" && object(item.candidate) && typeof item.candidate.url === "string" &&
-    typeof item.interested === "boolean" && Array.isArray(item.labels) && Array.isArray(item.broadcastDates) && typeof item.note === "string";
+    typeof item.interested === "boolean" && Array.isArray(item.labels) && Array.isArray(item.broadcastDates) && typeof item.note === "string" &&
+    (item.reactions === undefined || reactionsValid(item.reactions));
 }
 
 export function defaultState(): DeskState {
@@ -40,6 +46,8 @@ export function defaultState(): DeskState {
     selectedBroadcastDate: localDateKey(),
     communityPresetsApplied: true,
     watchlist: [],
+    collectionLog: [],
+    routineOnLaunch: false,
   };
 }
 
@@ -60,6 +68,8 @@ export function sanitizeState(value: unknown): DeskState {
     selectedBroadcastDate: typeof value.selectedBroadcastDate === "string" && DATE.test(value.selectedBroadcastDate) ? value.selectedBroadcastDate : base.selectedBroadcastDate,
     communityPresetsApplied: typeof value.communityPresetsApplied === "boolean" ? value.communityPresetsApplied : true,
     watchlist: watchlistValid(value.watchlist) ? value.watchlist : [],
+    collectionLog: Array.isArray(value.collectionLog) ? pruneLog(value.collectionLog.filter(collectionEntryValid), base.selectedBroadcastDate) : [],
+    routineOnLaunch: value.routineOnLaunch === true,
   };
 }
 

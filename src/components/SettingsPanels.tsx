@@ -88,7 +88,7 @@ export function SourcesPanel({ sources, onChange }: { sources: Source[]; onChang
   );
 }
 
-export function RulesPanel({ watchlist, onWatchlistChange }: { watchlist: string[]; onWatchlistChange: (next: string[]) => void }) {
+export function RulesPanel({ watchlist, onWatchlistChange, suggestions, routineOnLaunch, onRoutineOnLaunchChange }: { watchlist: string[]; onWatchlistChange: (next: string[]) => void; suggestions: { term: string; days: number; stories: number }[]; routineOnLaunch: boolean; onRoutineOnLaunchChange: (value: boolean) => void }) {
   const [draft, setDraft] = useState("");
   function add() {
     const next = addWatchTerm(watchlist, draft);
@@ -97,6 +97,16 @@ export function RulesPanel({ watchlist, onWatchlistChange }: { watchlist: string
   return (
     <main className="content narrow">
       <section className="panel">
+        <div className="panel-head">
+          <div>
+            <span className="eyebrow">ROUTINE</span>
+            <h1>방송 전 루틴</h1>
+            <p>「오늘의 토크」 탭의 「방송 전 루틴 실행」은 일반 뉴스 → 커뮤니티를 차례로 가져온 뒤 오늘 꺼낼 이야기 5개를 고릅니다. 아래를 켜면 앱을 실행할 때마다 자동으로 시작합니다.</p>
+          </div>
+        </div>
+        <label className="learning-rule"><input type="checkbox" checked={routineOnLaunch} onChange={(e) => onRoutineOnLaunchChange(e.target.checked)} /> <span><strong>앱 실행 시 루틴 자동 시작</strong><small>켜 두면 아침에 앱만 열어도 오늘의 토크가 준비됩니다. 네트워크가 없으면 건너뜁니다.</small></span></label>
+      </section>
+      <section className="panel" style={{ marginTop: 12 }}>
         <div className="panel-head">
           <div>
             <span className="eyebrow">WATCHLIST</span>
@@ -113,6 +123,14 @@ export function RulesPanel({ watchlist, onWatchlistChange }: { watchlist: string
             {watchlist.map((term) => <button key={term} title="이 단어 삭제" onClick={() => onWatchlistChange(watchlist.filter((value) => value !== term))}>{term} ×</button>)}
           </div>
         ) : <p className="inline-status">아직 등록한 단어가 없습니다. 최대 {MAX_WATCHLIST}개까지 등록할 수 있습니다.</p>}
+        {suggestions.length > 0 && (
+          <div className="suggestions">
+            <p className="inline-status">최근 2주 수집에서 반복 등장한 이름입니다. 누르면 워치리스트에 추가됩니다.</p>
+            <div className="personal-labels" aria-label="워치리스트 제안">
+              {suggestions.map((s) => <button key={s.term} title={`${s.days}일 · 기사 ${s.stories}건`} onClick={() => onWatchlistChange(addWatchTerm(watchlist, s.term))}>+ {s.term} <small>{s.days}일</small></button>)}
+            </div>
+          </div>
+        )}
       </section>
       <section className="panel" style={{ marginTop: 12 }}>
         <div className="panel-head">

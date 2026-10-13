@@ -19,9 +19,13 @@ export async function readBackupFile(): Promise<string | null> {
   return readTextFile(path);
 }
 
-export async function saveCueSheetFile(text: string, date: string) {
-  const path = await save({ title: "방송 큐시트 저장", defaultPath: `signal-desk-cuesheet-${date}.md`, filters: [{ name: "Markdown", extensions: ["md"] }, { name: "텍스트", extensions: ["txt"] }] });
+export async function saveMarkdownFile(text: string, defaultName: string, title: string) {
+  const path = await save({ title, defaultPath: defaultName, filters: [{ name: "Markdown", extensions: ["md"] }, { name: "텍스트", extensions: ["txt"] }] });
   if (!path) return false;
   await writeTextFile(path, text);
   return true;
+}
+
+export async function saveCueSheetFile(text: string, date: string) {
+  return saveMarkdownFile(text, `signal-desk-cuesheet-${date}.md`, "방송 큐시트 저장");
 }
