@@ -17,6 +17,10 @@ import { type PriorBroadcast } from "./history";
 import { type SortMode } from "./streams";
 import { WeeklyTab } from "./components/WeeklyTab";
 import { BriefingTab } from "./components/BriefingTab";
+import { ResearchTab } from "./components/ResearchTab";
+import { research as researchRequest } from "./agent";
+import { buildResearchView, normalizeKeyword, type ResearchView } from "./research";
+import { addWatchTerm } from "./watchlist";
 import { buildBriefing, type Briefing } from "./briefing";
 import { localDateKey } from "./storage";
 import type { DeskState } from "./state";
@@ -28,7 +32,7 @@ import { PrepTab } from "./components/PrepTab";
 import { BackupPanel, RulesPanel, SecurityPanel, SettingsNav, SourcesPanel, type SettingsSection } from "./components/SettingsPanels";
 import { UpdateModal } from "./components/UpdateModal";
 
-type Tab = "briefing" | "today" | "community" | "weekly" | "prep" | "archive" | "settings";
+type Tab = "briefing" | "today" | "community" | "research" | "weekly" | "prep" | "archive" | "settings";
 
 export default function App({ initial, migrated, loadError }: { initial: DeskState; migrated: boolean; loadError?: string }) {
   const [tab, setTab] = useState<Tab>("today");
@@ -55,6 +59,12 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   const [collectionLog, setCollectionLog] = useState<CollectionEntry[]>(initial.collectionLog);
   const [routineOnLaunch, setRoutineOnLaunch] = useState(initial.routineOnLaunch);
   const [briefingOverride, setBriefingOverride] = useState<Briefing | null>(null);
+  const [researchKeyword, setResearchKeyword] = useState("");
+  const [researchDays, setResearchDays] = useState(14);
+  const [researchRemote, setResearchRemote] = useState<{ keyword: string; items: Candidate[] } | null>(null);
+  const [researchStatus, setResearchStatus] = useState("");
+  const [researching, setResearching] = useState(false);
+  const [keepArchiveOnRestore, setKeepArchiveOnRestore] = useState(false);
   const today = localDateKey();
   const weeklyTerms = useMemo(() => persistentTerms(collectionLog, today), [collectionLog, today]);
   const watchSuggestions = useMemo(() => suggestWatchTerms(collectionLog, watchlist, today), [collectionLog, watchlist, today]);
@@ -154,6 +164,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   const priorByEvent = useMemo(() => new Map(ranked.map((item) => [item.event_id, findPriorBroadcast(item, broadcastRecords, today)] as [string, PriorBroadcast | null])), [ranked, broadcastRecords, today]);
   const followUpCount = useMemo(() => ranked.filter((item) => priorByEvent.get(item.event_id)?.followUp).length, [ranked, priorByEvent]);
   const filtered = useMemo(() => followUpsOnly ? ranked.filter((item) => priorByEvent.get(item.event_id)?.followUp) : ranked, [ranked, followUpsOnly, priorByEvent]);
+  const researchView = useMemo<ResearchView | null>(() => researchRemote ? buildResearchView(researchRemote.keyword, researchRemote.items, candidates, collectionLog, savedArticles) : null, [researchRemote, candidates, collectionLog, savedArticles]);
   const autoBriefing = useMemo(() => buildBriefing(learnedCandidates.filter((item) => !isRejected(item, rejectedIndex)), savedArticles, watchlist, today), [learnedCandidates, rejectedIndex, savedArticles, watchlist, today]);
   const briefing = briefingOverride ?? autoBriefing;
   useEffect(() => { setBriefingOverride(null); }, [learnedCandidates]);
@@ -373,6 +384,25 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     }
   }
 
+  async function runResearch() {
+    const keyword = normalizeKeyword(researchKeyword);
+    if (keyword.length < 2) return;
+    setResearching(true);
+    setRunning(true);
+    setResearchStatus(`「${keyword}」 관련 기사를 모으는 중…`);
+    try {
+      const r = await researchRequest(keyword, researchDays);
+      if (!r.ok) throw new Error(r.error ?? "리서치 실패");
+      setResearchRemote({ keyword, items: r.candidates ?? [] });
+      setResearchStatus(`${r.message ?? ""}${r.errors?.length ? ` · ${r.errors.join(" / ")}` : ""}`);
+    } catch (error) {
+      setResearchStatus(error instanceof Error ? error.message : "리서치 중 오류가 발생했습니다.");
+    } finally {
+      setResearching(false);
+      setRunning(false);
+    }
+  }
+
   /** 방송 전 루틴: 뉴스 → 커뮤니티 수집, then land on the briefing with today's picks. */
   async function runRoutine() {
     setTab("briefing");
@@ -409,11 +439,12 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate, rejectedItems, rejectionLearning: learning, watchlist, collectionLog, routineOnLaunch };
   }
 
-  async function exportBackup() {
+  async function exportBackup(settingsOnly = false) {
     setBackupBusy(true);
     try {
-      const saved = await saveBackupFile(serializeBackup(backupData()));
-      setBackupStatus(saved ? "백업을 저장했습니다. 다른 PC의 Signal Desk에서 이 파일을 불러오세요." : "내보내기를 취소했습니다.");
+      const data = settingsOnly ? { ...backupData(), articles: [], rejectedItems: [], collectionLog: [] } : backupData();
+      const saved = await saveBackupFile(serializeBackup(data));
+      setBackupStatus(saved ? (settingsOnly ? "설정만 담은 백업을 저장했습니다. 불러올 때 「설정만 복원」이 자동으로 켜집니다." : "백업을 저장했습니다. 다른 PC의 Signal Desk에서 이 파일을 불러오세요.") : "내보내기를 취소했습니다.");
     } catch (error) { setBackupStatus(error instanceof Error ? error.message : "백업 저장에 실패했습니다."); }
     finally { setBackupBusy(false); }
   }
@@ -423,7 +454,9 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     try {
       const raw = await readBackupFile();
       if (raw === null) { setBackupStatus("불러오기를 취소했습니다."); return; }
-      setPendingBackup(parseBackup(raw));
+      const parsed = parseBackup(raw);
+      setPendingBackup(parsed);
+      setKeepArchiveOnRestore(parsed.articles.length === 0 && !(parsed.rejectedItems?.length));
       setBackupStatus("백업 내용을 확인한 뒤 복원하세요. 현재 보관함과 설정이 백업 내용으로 교체됩니다.");
     } catch (error) { setBackupStatus(error instanceof Error ? error.message : "백업을 읽지 못했습니다."); }
     finally { setBackupBusy(false); }
@@ -434,29 +467,33 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     setBackupBusy(true);
     try {
       // Write the whole document first; state only changes once the file is safely on disk.
+      const keep = keepArchiveOnRestore;
+      const nextArticles = keep ? savedArticles : pendingBackup.articles;
+      const nextRejected = keep ? rejectedItems : pendingBackup.rejectedItems ?? [];
+      const nextLog = keep ? collectionLog : pendingBackup.collectionLog ?? [];
       await flushState({
         version: 1,
         sources: pendingBackup.sources,
         provider: pendingBackup.provider,
-        articles: pendingBackup.articles,
-        rejectedItems: pendingBackup.rejectedItems ?? [],
+        articles: nextArticles,
+        rejectedItems: nextRejected,
         rejectionLearning: pendingBackup.rejectionLearning ?? DEFAULT_LEARNING,
-        selectedBroadcastDate: pendingBackup.selectedBroadcastDate,
+        selectedBroadcastDate: keep ? selectedBroadcastDate : pendingBackup.selectedBroadcastDate,
         communityPresetsApplied: true,
         watchlist: pendingBackup.watchlist ?? [],
-        collectionLog: pendingBackup.collectionLog ?? [],
+        collectionLog: nextLog,
         routineOnLaunch: pendingBackup.routineOnLaunch ?? false,
       });
       setRoutineOnLaunch(pendingBackup.routineOnLaunch ?? false);
       setWatchlist(pendingBackup.watchlist ?? []);
-      setCollectionLog(pendingBackup.collectionLog ?? []);
-      setSavedArticles(pendingBackup.articles);
-      setRejectedItems(pendingBackup.rejectedItems ?? []);
+      setCollectionLog(nextLog);
+      setSavedArticles(nextArticles);
+      setRejectedItems(nextRejected);
       setLearning(pendingBackup.rejectionLearning ?? DEFAULT_LEARNING);
       setCheckedIds([]);
       setSources(pendingBackup.sources);
       setProvider(pendingBackup.provider);
-      setSelectedBroadcastDate(pendingBackup.selectedBroadcastDate);
+      if (!keep) setSelectedBroadcastDate(pendingBackup.selectedBroadcastDate);
       setCandidates([]);
       setLastRuns({ news: "", community: "" });
       setFilters({ news: "전체", community: "전체" });
@@ -465,7 +502,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
       setArchiveQuery("");
       setCommunityPresetsApplied(true);
       setPendingBackup(null);
-      setBackupStatus("보관함·방송 준비·소스 설정을 복원했습니다. AI 로그인은 이 PC에서 연결하세요.");
+      setBackupStatus(keep ? "소스·워치리스트·학습 설정을 복원했습니다. 보관함과 제외 목록은 그대로입니다." : "보관함·방송 준비·소스 설정을 복원했습니다. AI 로그인은 이 PC에서 연결하세요.");
     } catch { setBackupStatus("저장 공간이 부족하거나 저장소에 접근할 수 없어 복원하지 못했습니다. 기존 데이터는 유지됩니다."); }
     finally { setBackupBusy(false); }
   }
@@ -535,7 +572,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
       </header>
 
       <nav className="tabs">
-        {([["briefing", "오늘의 토크"], ["today", "일반 뉴스"], ["community", "커뮤니티·밈"], ["weekly", "주간 흐름"], ["prep", "방송 준비"], ["archive", "보관함"], ["settings", "환경설정"]] as [Tab, string][]).map(([value, label]) => (
+        {([["briefing", "오늘의 토크"], ["today", "일반 뉴스"], ["community", "커뮤니티·밈"], ["research", "키워드 리서치"], ["weekly", "주간 흐름"], ["prep", "방송 준비"], ["archive", "보관함"], ["settings", "환경설정"]] as [Tab, string][]).map(([value, label]) => (
           <button key={value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>{label}</button>
         ))}
       </nav>
@@ -653,6 +690,23 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
         />
       )}
 
+      {tab === "research" && (
+        <ResearchTab
+          view={researchView}
+          keyword={researchKeyword}
+          onKeywordChange={setResearchKeyword}
+          days={researchDays}
+          onDaysChange={setResearchDays}
+          running={researching}
+          status={researchStatus}
+          onRun={() => void runResearch()}
+          watchlist={watchlist}
+          onAddWatch={(term) => { setWatchlist((current) => addWatchTerm(current, term)); setStatus(`「${term}」을(를) 워치리스트에 추가했습니다.`); }}
+          isPlanned={(item) => Boolean(savedById.get(articleId(item.url))?.broadcastDates.includes(selectedBroadcastDate))}
+          onAddToPrep={(item) => toggleBroadcastDate(item)}
+        />
+      )}
+
       {tab === "weekly" && (
         <WeeklyTab
           log={collectionLog}
@@ -729,7 +783,10 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
           busy={backupBusy || running}
           status={backupStatus}
           pending={pendingBackup}
-          onExport={() => void exportBackup()}
+          onExport={() => void exportBackup(false)}
+          onExportSettings={() => void exportBackup(true)}
+          keepArchive={keepArchiveOnRestore}
+          onKeepArchiveChange={setKeepArchiveOnRestore}
           onImport={() => void importBackup()}
           onRestore={() => void restoreBackup()}
           onCancel={() => setPendingBackup(null)}

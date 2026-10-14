@@ -67,6 +67,8 @@ export type Candidate = {
 export type AgentResponse = {
   stream?: "news" | "community";
   cancelled?: boolean;
+  keyword?: string;
+  fetched?: number;
   negative_stats?: { suppressed: number; demoted: number };
   errors?: string[];
   ok: boolean;

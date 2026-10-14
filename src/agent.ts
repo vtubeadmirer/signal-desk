@@ -94,6 +94,17 @@ export async function cancelCollection(): Promise<boolean> {
   return Boolean(r.ok && (r as { cancelled?: boolean }).cancelled);
 }
 
+/** Keyword research through the sidecar's login-free news search feed. Cancellable like a collection. */
+export async function research(keyword: string, days: number) {
+  const requestId = String(++nextId);
+  activeCollect = requestId;
+  try {
+    return await callAgent({ op: "research", keyword, days, request_id: requestId });
+  } finally {
+    if (activeCollect === requestId) activeCollect = null;
+  }
+}
+
 export async function analyze(candidates: Candidate[], provider: string) {
   return callAgent({ op: "analyze", candidates, provider });
 }

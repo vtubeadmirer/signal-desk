@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
+import urllib.parse
 from urllib.parse import urljoin, urlparse
 import xml.etree.ElementTree as ET
 
@@ -599,7 +600,7 @@ def watch_matches(item: dict, watchlist: list[str]) -> list[str]:
     return [term for term in watchlist if term.lower() in text]
 
 
-def build_candidates(items: list[dict], personalization: dict | None = None, excluded_hashes: set[str] | None = None, negative_rules: list[dict] | None = None, negative_stats: dict | None = None, watchlist: list[str] | None = None) -> list[dict]:
+def build_candidates(items: list[dict], personalization: dict | None = None, excluded_hashes: set[str] | None = None, negative_rules: list[dict] | None = None, negative_stats: dict | None = None, watchlist: list[str] | None = None, window_hours: int = 48, limit: int = 20) -> list[dict]:
     now = datetime.now(timezone.utc)
     watchlist = watchlist or []
     items = [item for item in items
@@ -608,7 +609,7 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
              and not excluded_topic(item)
              and emergency_scope(item) != "foreign_or_unknown"
              and (published := parse_date(item.get("published_at"))) is not None
-             and timedelta(minutes=-5) <= now - published <= timedelta(hours=48)]
+             and timedelta(minutes=-5) <= now - published <= timedelta(hours=window_hours)]
     negative_rules = negative_rules or []
     assessed = [(item, negative_penalty(item, negative_rules)[0]) for item in items]
     if negative_stats is not None:
@@ -737,8 +738,8 @@ def build_candidates(items: list[dict], personalization: dict | None = None, exc
         item["priority"] = i
         item["slide_order"] = i
     if negative_stats is not None:
-        negative_stats["demoted"] = sum(item["negative_penalty"] > 0 for item in output[:20])
-    return output[:20]
+        negative_stats["demoted"] = sum(item["negative_penalty"] > 0 for item in output[:limit])
+    return output[:limit]
 
 
 TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref_src", "cmpid")
@@ -944,6 +945,37 @@ def collect_sources(sources: list[dict], budget: float = COLLECT_BUDGET_SECONDS,
     return items, errors, cancelled
 
 
+RESEARCH_DAYS = {7, 14, 30}
+RESEARCH_LIMIT = 40
+
+
+def research_sources(keyword: str) -> list[dict]:
+    """Login-free news search feeds for one keyword. Only Google News for now; Bing's RSS returned no items in testing."""
+    query = urllib.parse.quote(keyword)
+    return [
+        {"name": "Google 뉴스 검색", "url": f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko", "tier": "professional", "category": "사회·생활", "enabled": True},
+    ]
+
+
+def validate_keyword(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("검색어가 없습니다.")
+    keyword = " ".join(value.split())
+    if not 2 <= len(keyword) <= 60:
+        raise ValueError("검색어는 2~60자여야 합니다.")
+    return keyword
+
+
+def research(keyword: str, days: int, cancel: threading.Event | None = None) -> dict:
+    """Collect everything the search feeds have on one keyword within `days`, through the normal pipeline (gates, clustering, talk angles)."""
+    items, errors, cancelled = collect_sources(research_sources(keyword), cancel=cancel)
+    candidates = build_candidates(items, watchlist=[keyword], window_hours=days * 24, limit=RESEARCH_LIMIT)
+    for candidate in candidates:
+        candidate["event_id"] = f"research-{candidate['event_id']}"
+    candidates.sort(key=lambda c: c.get("published_at", ""), reverse=True)
+    return {"keyword": keyword, "days": days, "candidates": candidates, "fetched": len(items), "errors": errors, "cancelled": cancelled}
+
+
 def handle(request: dict) -> dict:
     debug_log(f"handle op={request.get("op", "")!r}")
     raw = json.dumps(request, ensure_ascii=False).encode("utf-8")
@@ -986,6 +1018,20 @@ def handle(request: dict) -> dict:
             candidate["event_id"] = f"{stream}-{candidate['event_id']}"
         message = f"수집 {len(items)}건 → 후보 {len(candidates)}건" + (" (취소됨: 받은 소스까지만 반영)" if cancelled else "")
         return {"ok": True, "op": op, "stream": stream, "negative_stats": negative_stats, "candidates": candidates, "message": message, "errors": errors, "cancelled": cancelled}
+    if op == "research":
+        try:
+            keyword = validate_keyword(request.get("keyword"))
+        except ValueError as exc:
+            return {"ok": False, "op": op, "error": str(exc)}
+        days = request.get("days", 14)
+        if not isinstance(days, int) or days not in RESEARCH_DAYS:
+            return {"ok": False, "op": op, "error": "기간은 7·14·30일 중 하나여야 합니다."}
+        cancel = _register_cancel(request.get("request_id"))
+        try:
+            result = research(keyword, days, cancel)
+        finally:
+            _release_cancel(request.get("request_id"))
+        return {"ok": True, "op": op, **result, "message": f"검색 {result['fetched']}건 → 관련 기사 {len(result['candidates'])}건"}
     if op == "cancel":
         target = request.get("target")
         return {"ok": True, "op": op, "cancelled": cancel_request(target)}

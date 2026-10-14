@@ -275,3 +275,16 @@
 .briefing-number{font-size:34px;font-weight:900;color:#4f5a68;line-height:1;padding-top:4px;text-align:center}
 .briefing-body h2{font-size:19px;margin:10px 0 6px;line-height:1.35}
 .briefing-questions{margin:8px 0 0;padding-left:18px;color:#c2c8d1;font-size:13px;line-height:1.55}
+.research-form{display:flex;gap:8px;align-items:center;margin-top:18px;flex-wrap:wrap}
+.research-form .archive-search{flex:1;min-width:260px}
+.research-form select{height:38px;background:#0d1014;border:1px solid #2a3038;border-radius:8px;color:#dbe0e7;padding:0 9px}
+.research-summary{margin-top:14px;padding:14px 16px;border:1px solid #272d35;border-radius:12px;background:#11151a;color:#aeb6c3;font-size:13px}
+.research-summary strong{color:#f1f3f5;font-size:15px}
+.research-summary .personal-labels{margin-top:10px}
+.research-timeline{margin-top:18px;display:flex;flex-direction:column;gap:14px}
+.research-day{display:grid;grid-template-columns:110px 1fr;gap:14px}
+.research-date{color:#8f98a7;font-weight:700;font-size:13px;padding-top:18px}
+.research-hits{display:flex;flex-direction:column;gap:10px}
+.research-hit{border:1px solid #272d35;background:#11151a;border-radius:13px;padding:16px 18px}
+.research-hit h2{font-size:16px;margin:10px 0 6px;line-height:1.35}
+@media(max-width:1100px){.research-day{grid-template-columns:1fr}.research-date{padding-top:0}}

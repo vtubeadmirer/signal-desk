@@ -183,16 +183,20 @@ export function SecurityPanel() {
   );
 }
 
-export function BackupPanel({ savedCount, sourceCount, busy, status, pending, onExport, onImport, onRestore, onCancel }: {
+export function BackupPanel({ savedCount, sourceCount, busy, status, pending, onExport, onExportSettings, onImport, onRestore, onCancel, keepArchive, onKeepArchiveChange }: {
   savedCount: number;
   sourceCount: number;
   busy: boolean;
   status: string;
   pending: DeskBackup | null;
   onExport: () => void;
+  onExportSettings: () => void;
   onImport: () => void;
   onRestore: () => void;
   onCancel: () => void;
+  /** Restore sources/watchlist/learning only and keep the current archive, exclusions and log. */
+  keepArchive: boolean;
+  onKeepArchiveChange: (value: boolean) => void;
 }) {
   return (
     <main className="content narrow">
@@ -202,6 +206,7 @@ export function BackupPanel({ savedCount, sourceCount, busy, status, pending, on
         <p>현재 보관함 {savedCount}개 · 수집 소스 {sourceCount}개. AI 인증정보는 백업에 포함되지 않습니다.</p>
         <div className="saved-card-actions">
           <button className="primary" disabled={busy} onClick={onExport}>백업 내보내기</button>
+          <button className="secondary" disabled={busy} onClick={onExportSettings} title="소스·워치리스트·학습 설정만 담은 작은 파일">설정만 내보내기</button>
           <button className="secondary" disabled={busy} onClick={onImport}>백업 불러오기</button>
         </div>
         <p role="status">{status}</p>
@@ -209,7 +214,8 @@ export function BackupPanel({ savedCount, sourceCount, busy, status, pending, on
           <h2>복원할 백업 확인</h2>
           <p>내보낸 시각: {new Date(pending.exportedAt).toLocaleString("ko-KR")}</p>
           <p>기사 {pending.articles.length}개 · 방송 준비 {pending.articles.filter((record) => record.broadcastDates.length > 0).length}개 · 소스 {pending.sources.length}개 · 제외 {pending.rejectedItems?.length ?? 0}개</p>
-          <p>복원하면 현재 보관함·소스 설정·제외 목록을 교체합니다. 기존 내용을 보존하려면 먼저 백업 내보내기를 사용하세요.</p>
+          <label className="learning-rule"><input type="checkbox" checked={keepArchive} onChange={(e) => onKeepArchiveChange(e.target.checked)} /> <span><strong>설정만 복원</strong><small>소스·워치리스트·학습 설정·루틴만 바꾸고 현재 보관함·제외 목록·수집 기록은 그대로 둡니다. 설정만 내보낸 파일이면 자동으로 켜집니다.</small></span></label>
+          <p>{keepArchive ? "소스와 설정만 교체되고 보관함은 유지됩니다." : "복원하면 현재 보관함·소스 설정·제외 목록을 교체합니다. 기존 내용을 보존하려면 먼저 백업 내보내기를 사용하세요."}</p>
           <div className="saved-card-actions">
             <button className="primary" disabled={busy} onClick={onRestore}>백업 내용으로 복원</button>
             <button className="secondary" onClick={onCancel}>취소</button>

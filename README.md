@@ -1,4 +1,4 @@
-# Signal Desk — Secure Desktop v0.7
+# Signal Desk — Secure Desktop v0.8
 
 Signal Desk is a local-first Windows desktop prototype for broadcast-news curation.
 
@@ -176,5 +176,14 @@ Direction and ranking came from a nine-agent ideation pass recorded in `docs/JUS
 - **코너별 큐시트.** The cue sheet groups stories into 뉴스 브리핑 → 밈 리뷰 → 사연·내 경험 → 찬반 토론 with minutes per corner and a total; the 방송 준비 cards show the corner.
 - **채팅 터질 순.** A sort toggle on the news and community tabs ranks by talkability, profile, comment volume and watchlist hits instead of score.
 - Deliberately not done, per the judges: tray/scheduler (needs Rust and shell access), AI schema extension (Codex strict output schemas), conditional-GET cache, positive rule learning (filter-bubble risk until reactions accumulate).
+
+Verification: `python -m unittest discover -s python/tests`, `node --test "tests/*.test.cjs"`, `npm run build`.
+
+## v0.8.0: keyword research, settings-only backups, line endings
+
+- **키워드 리서치 tab.** Type a topic (e.g. `RTX 5090 생산 중단`), pick 7/14/30 days, and the sidecar's new `research` op fetches Google News' login-free search RSS for it through the normal HTTPS-only pipeline (editorial gates, clustering, talk angles; up to 40 stories). The view merges those with matching current candidates, the 30-day collection log and the archive, grouped newest day first, with origin badges, sources, related terms (click to re-search), 「워치리스트에 추가」, 「방송 준비에 담기」 and a markdown 「리서치 복사」. No article bodies are fetched; Google titles are split into title and publisher. Bing's RSS returned no items in testing and is not used.
+- **Settings-only backup.** 「설정만 내보내기」 writes a small backup (sources, watchlist, learning settings, routine) in the same v1 format; restoring any backup now offers 「설정만 복원」, which keeps the current archive, exclusions and collection log. It is pre-selected for settings-only files.
+- `.gitattributes` normalizes line endings to LF (PowerShell scripts stay CRLF), ending the per-file CRLF warnings on Windows checkouts.
+- The sidecar's `build_candidates` takes `window_hours` and `limit` (defaults unchanged: 48 h, 20).
 
 Verification: `python -m unittest discover -s python/tests`, `node --test "tests/*.test.cjs"`, `npm run build`.
