@@ -76,7 +76,7 @@ export type AgentResponse = {
   error?: string;
   candidates?: Candidate[];
   sources?: Source[];
-  provider?: { name: string; installed: boolean; authenticated?: boolean; version?: string; auth_hint?: string };
+  provider?: { name: string; installed: boolean; authenticated?: boolean | null; version?: string; auth_hint?: string };
   message?: string;
 };
 

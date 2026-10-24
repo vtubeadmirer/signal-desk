@@ -187,3 +187,12 @@ Verification: `python -m unittest discover -s python/tests`, `node --test "tests
 - The sidecar's `build_candidates` takes `window_hours` and `limit` (defaults unchanged: 48 h, 20).
 
 Verification: `python -m unittest discover -s python/tests`, `node --test "tests/*.test.cjs"`, `npm run build`.
+
+
+## v0.9.0 AI account connections
+
+환경설정 → AI 연결에서 Codex, Claude, Gemini 중 하나를 선택합니다. 공식 CLI를 처음 한 번 설치한 뒤 「브라우저 로그인 연결」을 누르면 공식 도구의 로그인 터미널이 열립니다. Gemini는 Login with Google을 선택합니다. 로그인 후 「연결 테스트」로 확인합니다. Gemini 연결 테스트는 실제 모델 호출이므로 해당 계정 사용 한도를 소량 소비합니다. 계정·지역·구독에 따른 제공사 사용 한도가 적용됩니다.
+
+공식 CLI 설치·인증은 사용자 PC에서 수행하며 로그인 토큰을 Signal Desk에 복사하거나 백업에 포함하지 않습니다. 백업에는 선택한 AI만 저장합니다. Claude와 Gemini 분석은 도구 호출을 차단하고, 분석 응답이 원문 URL·제목 등 출처 필드를 덮어쓰지 못하도록 검증합니다. 최신 공식 CLI가 필요하며 지원하지 않는 옵션이나 인증 실패는 연결 실패로 안내합니다. Grok은 제공하지 않습니다.
+
+Windows packaged-build checks and mocked adapter tests do not substitute for a real signed-in provider test. Claude/Gemini account login and live inference must be verified on the user's PC after installing those CLIs.

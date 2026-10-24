@@ -6,10 +6,10 @@ import { MAX_WATCHLIST, MAX_WATCH_TERM, addWatchTerm } from "../watchlist";
 import type { DeskBackup } from "../backup";
 import type { Source } from "../types";
 
-export type SettingsSection = "sources" | "rules" | "security" | "backup" | "excluded";
+export type SettingsSection = "sources" | "rules" | "security" | "backup" | "excluded" | "ai";
 
 export function SettingsNav({ section, onChange }: { section: SettingsSection; onChange: (section: SettingsSection) => void }) {
-  const entries: [SettingsSection, string][] = [["sources", "뉴스 소스"], ["rules", "워치리스트·선별"], ["excluded", "제외 목록"], ["backup", "백업·복원"], ["security", "보안"]];
+  const entries: [SettingsSection, string][] = [["ai", "AI 연결"], ["sources", "뉴스 소스"], ["rules", "워치리스트·선별"], ["excluded", "제외 목록"], ["backup", "백업·복원"], ["security", "보안"]];
   return (
     <div className="content narrow settings-switch">
       <nav className="settings-subtabs">

@@ -10,7 +10,7 @@ export type DeskBackup = {
   exportedAt: string;
   articles: ArticleRecord[];
   sources: Source[];
-  provider: "codex";
+  provider: "codex" | "claude" | "gemini";
   selectedBroadcastDate: string;
   rejectedItems?: RejectedItem[];
   rejectionLearning?: LearningSettings;
@@ -96,7 +96,7 @@ export function parseBackup(raw: string): DeskBackup {
   if (new TextEncoder().encode(raw).length > MAX_BACKUP_BYTES) throw new Error("백업 파일은 4MB 이하여야 합니다.");
   const value: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
   if (!object(value) || value.format !== "signal-desk-backup" || value.version !== 1) throw new Error("지원하는 Signal Desk 백업 파일이 아닙니다.");
-  if (!timestamp(value.exportedAt) || value.provider !== "codex" || !date(value.selectedBroadcastDate)) throw new Error("백업 설정이나 날짜가 올바르지 않습니다.");
+  if (!timestamp(value.exportedAt) || !["codex", "claude", "gemini"].includes(value.provider as string) || !date(value.selectedBroadcastDate)) throw new Error("백업 설정이나 날짜가 올바르지 않습니다.");
   if (!Array.isArray(value.sources) || value.sources.length > 50 || !value.sources.every(sourceValid)) throw new Error("백업의 수집 소스가 올바르지 않습니다.");
   if (!Array.isArray(value.articles) || value.articles.length > 2000) throw new Error("백업의 기사 목록이 올바르지 않습니다.");
   if (value.rejectedItems !== undefined && (!Array.isArray(value.rejectedItems) || value.rejectedItems.length > MAX_REJECTIONS || !value.rejectedItems.every(rejectionValid) || new Set(value.rejectedItems.map((item) => item.id)).size !== value.rejectedItems.length)) throw new Error("백업의 제외 목록이 올바르지 않습니다.");

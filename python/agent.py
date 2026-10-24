@@ -1,4 +1,5 @@
 from __future__ import annotations
+import providers
 
 import argparse
 import http.client
@@ -769,17 +770,19 @@ def _provider_creation_flags() -> int:
     return subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
-def provider_status() -> dict:
+def provider_status(name="codex") -> dict:
+    if name != "codex":
+        return providers.status(name, _provider_env())
     env = _provider_env()
     try:
         version = subprocess.run(
-            ["codex", "--version"], capture_output=True, text=True, timeout=8,
+            [providers.executable("codex"), "--version"], capture_output=True, text=True, timeout=8,
             shell=False, check=False, env=env, creationflags=_provider_creation_flags()
         )
         if version.returncode != 0:
             return {"name": "codex", "installed": True, "authenticated": False, "version": version.stdout.strip(), "auth_hint": "codex login을 완료하세요."}
         auth = subprocess.run(
-            ["codex", "login", "status"], capture_output=True, text=True, timeout=12,
+            [providers.executable("codex"), "login", "status"], capture_output=True, text=True, timeout=12,
             shell=False, check=False, env=env, creationflags=_provider_creation_flags()
         )
         return {
@@ -828,7 +831,7 @@ def ai_analyze(candidates: list[dict]) -> list[dict]:
             "Write all free text in Korean for a live just-chatting stream: discussion_points should be questions or angles the host can throw at chat, not summaries."
         )
         command = [
-            "codex", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+            providers.executable("codex"), "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
             "--sandbox", "read-only", "--ask-for-approval", "never",
             "-c", "allow_login_shell=false", "-c", "agents.enabled=false",
             "--output-schema", str(schema), "-o", str(output), prompt,
@@ -982,8 +985,26 @@ def handle(request: dict) -> dict:
     if len(raw) > MAX_INPUT_BYTES:
         return {"ok": False, "op": str(request.get("op", "")), "error": "입력이 너무 큽니다."}
     op = request.get("op")
+    if op in {"provider_login", "provider_test"}:
+        try:
+            name = providers.validate_provider(request.get("provider"))
+            if op == "provider_login":
+                providers.login(name, _provider_env())
+                return {"ok": True, "op": op}
+            if name == "codex":
+                ready = provider_status()
+                if not ready.get("authenticated"):
+                    raise RuntimeError("Codex에 먼저 로그인하세요.")
+            else:
+                answer = providers.query(name, "Reply with exactly SIGNAL_DESK_READY. No tools.", _provider_env())
+                if not isinstance(answer, str) or answer.strip() != "SIGNAL_DESK_READY":
+                    providers._verified.discard(name)
+                    raise RuntimeError("연결 테스트 응답이 올바르지 않습니다.")
+            return {"ok": True, "op": op, "provider": provider_status(name)}
+        except (ValueError, OSError, subprocess.SubprocessError, RuntimeError):
+            return {"ok": False, "op": op, "error": "AI 연결을 완료하지 못했습니다. 공식 CLI 설치·로그인·사용 한도를 확인하세요."}
     if op == "health":
-        return {"ok": True, "op": op, "provider": provider_status(), "message": "Signal Desk agent ready"}
+        return {"ok": True, "op": op, "provider": provider_status(request.get("provider", "codex")), "message": "Signal Desk agent ready"}
     if op == "collect":
         stream = request.get("stream", "news")
         if not isinstance(stream, str) or stream not in {"news", "community"}:
@@ -1039,10 +1060,10 @@ def handle(request: dict) -> dict:
         candidates = request.get("candidates", [])
         if not isinstance(candidates, list) or len(candidates) > 15:
             return {"ok": False, "op": op, "error": "AI 분석 대상은 최대 15건입니다."}
-        if request.get("provider") != "codex":
-            return {"ok": False, "op": op, "error": "현재 지원되는 provider는 codex뿐입니다."}
+        if request.get("provider") not in providers.NAMES:
+            return {"ok": False, "op": op, "error": "지원하지 않는 AI입니다."}
         try:
-            merged = ai_analyze(candidates)
+            merged = ai_analyze(candidates) if request["provider"] == "codex" else providers.analyze(request["provider"], candidates, _provider_env(), json.loads(analysis_schema_path().read_text(encoding="utf-8")))
             return {"ok": True, "op": op, "candidates": merged}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "op": op, "error": str(exc)}

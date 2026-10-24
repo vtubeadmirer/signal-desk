@@ -65,8 +65,8 @@ export async function callAgent(payload: Record<string, unknown>): Promise<Agent
   });
 }
 
-export async function health() {
-  return callAgent({ op: "health" });
+export async function health(provider = "codex") {
+  return callAgent({ op: "health", provider });
 }
 
 export async function collect(

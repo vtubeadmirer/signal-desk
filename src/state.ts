@@ -61,7 +61,7 @@ export function sanitizeState(value: unknown): DeskState {
   return {
     version: 1,
     sources,
-    provider: value.provider === "codex" ? "codex" : base.provider,
+    provider: typeof value.provider === "string" && ["codex", "claude", "gemini"].includes(value.provider) ? value.provider : base.provider,
     articles,
     rejectedItems,
     rejectionLearning: learningValid(value.rejectionLearning) ? value.rejectionLearning : DEFAULT_LEARNING,

@@ -1,6 +1,6 @@
 [package]
 name = "signal-desk"
-version = "0.8.1"
+version = "0.9.0"
 description = "Local-first broadcast news curation desktop app"
 authors = ["Signal Desk"]
 edition = "2021"

@@ -66,3 +66,13 @@ test('backup carries the watchlist and rejects malformed lists',()=>{
  original.watchlist=['x'];
  assert.throws(()=>api.serializeBackup(original));
 });
+
+test('selected AI survives backup and unknown providers are rejected',()=>{
+ for (const provider of ['codex','claude','gemini']) {
+  const original={...data(),provider};
+  assert.equal(api.parseBackup(api.serializeBackup(original)).provider,provider);
+ }
+ const bad=JSON.parse(api.serializeBackup(data()));
+ bad.provider='grok';
+ assert.throws(()=>api.parseBackup(JSON.stringify(bad)));
+});

@@ -6,7 +6,7 @@ import { DEFAULT_LEARNING, type LearningSettings, addRejections, exclusionHashes
 import { candidateStream, sourceStream, streamCandidates, replaceStream, type SignalStream, type SavedStream } from "./streams";
 import { parseBackup, serializeBackup, type DeskBackup } from "./backup";
 import { readBackupFile, saveBackupFile } from "./backupFiles";
-import { analyze, cancelCollection, collect, health } from "./agent";
+import { analyze, cancelCollection, collect, health, callAgent } from "./agent";
 import { CATEGORIES, COMMUNITY_SOURCES, articleId, isSavedArticle } from "./storage";
 import { flushState, saveState, writeSnapshot } from "./persist";
 import { findPriorBroadcast } from "./history";
@@ -40,7 +40,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   const [sources, setSources] = useState<Source[]>(initial.sources);
   const [provider, setProvider] = useState(initial.provider);
   const [status, setStatus] = useState(loadError ?? (migrated ? "이전 버전의 데이터를 새 저장 방식으로 옮겼습니다." : "준비됨"));
-  const [providerStatus, setProviderStatus] = useState<{ installed: boolean; authenticated?: boolean; version?: string; auth_hint?: string } | null>(null);
+  const [providerStatus, setProviderStatus] = useState<{ installed: boolean; authenticated?: boolean | null; version?: string; auth_hint?: string } | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [savedArticles, setSavedArticles] = useState<ArticleRecord[]>(initial.articles);
   const [rejectedItems, setRejectedItems] = useState<RejectedItem[]>(initial.rejectedItems);
@@ -120,9 +120,30 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     saveState(persisted, () => setStatus("데이터를 저장하지 못했습니다. 디스크 공간을 확인하고 백업 내보내기로 내용을 보존하세요."));
   }, [persisted, migrated]);
 
+  const [aiConnectBusy, setAiConnectBusy] = useState(false);
+  const [aiConnectMessage, setAiConnectMessage] = useState("");
+  useEffect(() => {
+    let alive = true;
+    setProviderStatus(null);
+    setAiConnectMessage("");
+    void health(provider).then(result => { if (alive) setProviderStatus(result.provider ?? null); }).catch(() => {});
+    return () => { alive = false; };
+  }, [provider]);
+  async function connectAi(op: "provider_login" | "provider_test") {
+    setAiConnectBusy(true);
+    setAiConnectMessage(op === "provider_login" ? "공식 로그인 창을 여는 중…" : "AI 연결 테스트 중… 사용 한도가 소량 소비될 수 있습니다.");
+    try {
+      const result = await callAgent({ op, provider });
+      if (!result.ok) throw new Error(result.error ?? "AI 연결 실패");
+      if (op === "provider_test") setProviderStatus(result.provider ?? null);
+      setAiConnectMessage(op === "provider_login" ? "열린 공식 도구에서 브라우저 로그인을 완료한 뒤 연결 테스트를 눌러주세요. Gemini는 Login with Google을 선택하세요." : "AI 연결을 확인했습니다.");
+    } catch (error) { setAiConnectMessage(error instanceof Error ? error.message : "연결 실패"); }
+    finally { setAiConnectBusy(false); }
+  }
+
   async function refreshHealth() {
     try {
-      const r = await health();
+      const r = await health(provider);
       setProviderStatus(r.provider ?? null);
     } catch {
       setProviderStatus(null);
@@ -130,7 +151,6 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   }
 
   useEffect(() => {
-    void refreshHealth();
     // The release scaffold ships placeholder updater keys; asking GitHub for a
     // non-existent manifest on every launch is pointless until they are set.
     if (__UPDATER_CONFIGURED__) void checkForUpdate();
@@ -457,7 +477,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
   }
 
   function backupData() {
-    return { articles: savedArticles, sources, provider: "codex" as const, selectedBroadcastDate, rejectedItems, rejectionLearning: learning, watchlist, collectionLog, routineOnLaunch };
+    return { articles: savedArticles, sources, provider: provider as DeskBackup["provider"], selectedBroadcastDate, rejectedItems, rejectionLearning: learning, watchlist, collectionLog, routineOnLaunch };
   }
 
   async function exportBackup(settingsOnly = false) {
@@ -588,7 +608,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
         </div>
         <div className="top-actions">
           <span className={`status-dot ${providerStatus?.authenticated ? "ok" : "warn"}`} />
-          <span>{providerStatus?.authenticated ? `Codex ${providerStatus.version ?? "인증됨"}` : providerStatus?.installed ? "Codex 로그인 필요" : "AI 연결 필요"}</span>
+          <span>{providerStatus?.authenticated ? `${provider} ${providerStatus.version ?? "인증됨"}` : providerStatus?.installed ? `${provider} 로그인 확인 필요` : "AI 연결 필요"}</span>
         </div>
       </header>
 
@@ -618,7 +638,7 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
                 {running ? "처리 중…" : stream === "news" ? "뉴스 가져오기" : "커뮤니티 소식 가져오기"}
               </button>
               {collecting && <button className="secondary" onClick={() => void cancelRunningCollection()}>중단하고 지금까지로</button>}
-              <button className="secondary" disabled={running || !filtered.length || !providerStatus?.authenticated} onClick={runAiAnalysis}>
+              <button className="secondary" disabled={running || aiConnectBusy || !filtered.length || !providerStatus?.authenticated} onClick={runAiAnalysis}>
                 AI 분석
               </button>
             </div>
@@ -784,6 +804,21 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
         />
       )}
 
+      {tab === "settings" && settingsSection === "ai" && <section className="content narrow">
+        <h2>AI 연결</h2>
+        <p>AI를 선택하고 공식 도구에서 브라우저 로그인을 완료하세요. 로그인 정보는 해당 도구가 관리합니다.</p>
+        <label>분석에 사용할 AI <select value={provider} disabled={running || aiConnectBusy} onChange={event => setProvider(event.target.value)}>
+          <option value="codex">코덱스 · ChatGPT</option><option value="claude">클로드 · Claude</option><option value="gemini">제미나이 · Google</option>
+        </select></label>
+        <p>{providerStatus?.auth_hint ?? "연결 상태 확인 중…"}</p>
+        <button className="primary" disabled={running || aiConnectBusy || !providerStatus?.installed} onClick={() => void connectAi("provider_login")}>브라우저 로그인 연결</button>
+        <button className="secondary" disabled={running || aiConnectBusy || !providerStatus?.installed} onClick={() => void connectAi("provider_test")}>연결 테스트</button>
+        <p role="status">{aiConnectMessage}</p>
+        <details><summary>공식 도구 설치 안내</summary>
+          <p>처음 한 번 공식 CLI를 설치해야 합니다. 설치 후 Signal Desk를 다시 실행하세요.</p>
+          <button className="secondary" onClick={() => void openUrl(provider === "codex" ? "https://learn.chatgpt.com/docs/codex/cli" : provider === "claude" ? "https://code.claude.com/docs/en/setup" : "https://geminicli.com/docs/get-started/installation/")}>선택한 AI 공식 설치 안내 열기</button>
+        </details>
+      </section>}
       {tab === "settings" && <SettingsNav section={settingsSection} onChange={setSettingsSection} />}
       {tab === "settings" && settingsSection === "excluded" && (
         <ExcludedPanel
