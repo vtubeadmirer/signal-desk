@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test-and-build:
@@ -112,3 +112,19 @@ jobs:
           name: signal-desk-windows-portable
           path: Signal-Desk-Portable.zip
           if-no-files-found: error
+
+      - name: Publish versioned portable release and update notes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          gh release view $tag --repo ${{ github.repository }} *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists; bump package version to publish another update."
+            exit 0
+          }
+          gh release create $tag Signal-Desk-Portable.zip --repo ${{ github.repository }} --target ${{ github.sha }} --title "Signal Desk $tag" --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw "Release publication failed" }

@@ -138,6 +138,27 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [releaseNotice, setReleaseNotice] = useState<{ version: string; notes: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    async function checkRelease() {
+      try {
+        const response = await fetch("https://api.github.com/repos/vtubeadmirer/signal-desk/releases/latest", { signal: AbortSignal.timeout(10000) });
+        if (!response.ok) return;
+        const release = await response.json();
+        if (release.draft || release.prerelease || typeof release.tag_name !== "string") return;
+        const version: string = release.tag_name.replace(/^v/, "");
+        if (!/^\d+\.\d+\.\d+$/.test(version)) return;
+        const remote = version.split(".").map(Number), local = __APP_VERSION__.split(".").map(Number);
+        const difference = remote.map((part, index) => part - local[index]).find(value => value !== 0) ?? 0;
+        if (alive && difference > 0) setReleaseNotice({ version, notes: typeof release.body === "string" ? release.body.slice(0, 30000) : "새 버전이 배포되었습니다." });
+      } catch { /* Offline checks must not interrupt news collection. */ }
+    }
+    void checkRelease();
+    const timer = window.setInterval(() => void checkRelease(), 60 * 60 * 1000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, []);
+
   async function checkForUpdate() {
     try {
       const update = await check();
@@ -571,6 +592,12 @@ export default function App({ initial, migrated, loadError }: { initial: DeskSta
         </div>
       </header>
 
+      {releaseNotice && <section className="card" aria-label="업데이트 안내" aria-live="polite">
+        <h2>Signal Desk v{releaseNotice.version} 업데이트</h2>
+        <details><summary>업데이트 내역 보기</summary><pre style={{ whiteSpace: "pre-wrap", maxHeight: 320, overflow: "auto" }}>{releaseNotice.notes}</pre></details>
+        <button className="primary" onClick={() => void openUrl("https://github.com/vtubeadmirer/signal-desk/releases/latest")}>새 버전 다운로드</button>
+        <button className="secondary" onClick={() => setReleaseNotice(null)}>나중에</button>
+      </section>}
       <nav className="tabs">
         {([["briefing", "오늘의 토크"], ["today", "일반 뉴스"], ["community", "커뮤니티·밈"], ["research", "키워드 리서치"], ["weekly", "주간 흐름"], ["prep", "방송 준비"], ["archive", "보관함"], ["settings", "환경설정"]] as [Tab, string][]).map(([value, label]) => (
           <button key={value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>{label}</button>
