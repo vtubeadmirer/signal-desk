@@ -26,7 +26,7 @@ class ProviderProcessTests(unittest.TestCase):
                 Path(command[command.index("-o") + 1]).write_text('{"items":[]}', encoding="utf-8")
             return subprocess.CompletedProcess(command, 0, "codex test", "")
 
-        with patch("agent._provider_creation_flags", return_value=0x08000000), patch("agent.subprocess.run", side_effect=run) as process:
+        with patch("providers.executable", side_effect=lambda name: name), patch("agent._provider_creation_flags", return_value=0x08000000), patch("agent.subprocess.run", side_effect=run) as process:
             self.assertTrue(agent.provider_status()["authenticated"])
             self.assertEqual(agent.ai_analyze([]), [])
         self.assertEqual([call.args[0][1] for call in process.call_args_list], ["--version", "login", "--version", "login", "exec"])
